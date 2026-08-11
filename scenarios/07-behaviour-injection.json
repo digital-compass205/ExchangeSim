@@ -1,0 +1,62 @@
+{
+  "name": "Injected behaviour: forced rejects and dropped reports",
+
+  "sessions": {
+    "trader": {"comp_id": "CLIENT1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "behaviour.clear"},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+
+    {"logon": "trader", "reset": true},
+    {"clear": "trader"},
+
+    {"comment": "Force the next order to be rejected as surveillance would",
+     "control": "behaviour.set",
+     "args": {"action": "reject", "count": 1, "reason": "OTHER",
+              "text": "forced by test"},
+     "expect_result": {"action": "reject", "remaining": 1}},
+
+    {"comment": "A perfectly valid order is refused",
+     "send": "trader",
+     "fields": {"35": "D", "11": "B7-FORCED", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "8", "39": "8", "11": "B7-FORCED",
+                "103": "99", "58": "forced by test"}},
+
+    {"comment": "The rule was exhausted, so the next order behaves normally",
+     "send": "trader",
+     "fields": {"35": "D", "11": "B7-NORMAL", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "0", "11": "B7-NORMAL"}},
+
+    {"comment": "Dropping a report leaves the client waiting for an answer",
+     "control": "behaviour.set",
+     "args": {"action": "drop", "count": 1, "symbol": "7203"}},
+    {"send": "trader",
+     "fields": {"35": "D", "11": "B7-DROPPED", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.0"}},
+    {"expect_none": "trader", "fields": {"11": "B7-DROPPED"}, "for": 1.0},
+
+    {"comment": "though the order really did reach the book",
+     "control": "orders", "args": {"market": "DAY", "symbol": "7203"}},
+
+    {"comment": "A delayed report still arrives, just late",
+     "control": "behaviour.set",
+     "args": {"action": "delay", "count": 1, "delay_ms": 600,
+              "symbol": "7203"}},
+    {"send": "trader",
+     "fields": {"35": "D", "11": "B7-DELAYED", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2844.0"}},
+    {"expect_none": "trader", "fields": {"11": "B7-DELAYED"}, "for": 0.3},
+    {"expect": "trader", "fields": {"35": "8", "150": "0", "11": "B7-DELAYED"},
+     "timeout": 3},
+
+    {"control": "behaviour.clear"},
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "trader"}
+  ]
+}

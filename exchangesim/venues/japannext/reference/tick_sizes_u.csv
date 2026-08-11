@@ -1,0 +1,11 @@
+# U-Market tick sizes.
+# Source: JNX_Trading_Rules_Equities_2.02, Appendix 5 (U-Market Tick Size).
+#
+# *** UNVERIFIED -- see the note in tick_sizes_j.csv ***
+#
+# Appendix 5 has a single "All Stocks" column, so U-Market does not vary by
+# TOPIX tier. Only two tick values are legible: 0.1 at the low end and 1 above
+# roughly 100,000.
+lower_bound,tier,tick
+0,,0.1
+100000,,1

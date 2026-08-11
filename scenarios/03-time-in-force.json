@@ -1,0 +1,73 @@
+{
+  "name": "IOC and FOK: partial fill, all-or-nothing, MinQty",
+
+  "sessions": {
+    "buyer": {"comp_id": "CLIENT1"},
+    "seller": {"comp_id": "CLIENT2"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+
+    {"logon": "seller", "reset": true},
+    {"logon": "buyer", "reset": true},
+    {"clear": "seller"},
+    {"clear": "buyer"},
+
+    {"comment": "Rest 100 to trade against",
+     "send": "seller",
+     "fields": {"35": "D", "11": "T3-SELL", "55": "7203", "54": "2",
+                "38": "100", "40": "2", "44": "2846.0"}},
+    {"expect": "seller", "fields": {"35": "8", "150": "0"}},
+
+    {"comment": "An IOC fills what it can and cancels the rest",
+     "send": "buyer",
+     "fields": {"35": "D", "11": "T3-IOC", "55": "7203", "54": "1",
+                "38": "300", "40": "2", "44": "2846.0", "59": "3"}},
+    {"expect": "buyer",
+     "fields": {"35": "8", "150": "1", "11": "T3-IOC", "32": "100",
+                "14": "100", "151": "200"}},
+    {"expect": "buyer",
+     "fields": {"35": "8", "150": "4", "39": "4", "11": "T3-IOC",
+                "151": "0"}},
+
+    {"comment": "Rest another 100",
+     "send": "seller",
+     "fields": {"35": "D", "11": "T3-SELL2", "55": "7203", "54": "2",
+                "38": "100", "40": "2", "44": "2846.0"}},
+    {"expect": "seller", "fields": {"35": "8", "150": "0"}},
+    {"clear": "seller"},
+
+    {"comment": "A FOK that cannot fill completely cancels without executing",
+     "send": "buyer",
+     "fields": {"35": "D", "11": "T3-FOK", "55": "7203", "54": "1",
+                "38": "300", "40": "2", "44": "2846.0", "59": "4"}},
+    {"expect": "buyer",
+     "fields": {"35": "8", "150": "4", "39": "4", "11": "T3-FOK",
+                "14": "0", "151": "0"}},
+    {"comment": "and the resting order is untouched",
+     "expect_none": "seller", "for": 0.4},
+
+    {"comment": "An IOC whose MinQty cannot be met also leaves the book alone",
+     "send": "buyer",
+     "fields": {"35": "D", "11": "T3-MINQTY", "55": "7203", "54": "1",
+                "38": "300", "40": "2", "44": "2846.0", "59": "3",
+                "110": "200"}},
+    {"expect": "buyer",
+     "fields": {"35": "8", "150": "4", "11": "T3-MINQTY", "14": "0",
+                "110": "200"}},
+    {"expect_none": "seller", "for": 0.4},
+
+    {"comment": "MinQty is only valid with IOC",
+     "send": "buyer",
+     "fields": {"35": "D", "11": "T3-BADMIN", "55": "7203", "54": "1",
+                "38": "300", "40": "2", "44": "2845.0", "59": "0",
+                "110": "100"}},
+    {"expect": "buyer", "fields": {"35": "8", "150": "8", "103": "11"}},
+
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "buyer"},
+    {"logout": "seller"}
+  ]
+}

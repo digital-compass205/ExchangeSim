@@ -1,0 +1,41 @@
+# SEHK spread table -- the minimum price increment by price band.
+#
+# Source: Rules of the Exchange of SEHK, Second Schedule, Part A ("All
+# securities, other than those securities covered under Part B, Part C, Part D
+# and/or Part E"). Verified against the published Second Schedule, which already
+# incorporates the minimum-spread reductions that followed the June 2024
+# consultation (conclusions December 2024; Phase 1 effective 4 August 2025).
+# Prices are HKD with three decimal places.
+#
+# The Schedule reads "From 0.01 to 0.25 ... 0.001 / Over 0.25 to 10.00 ...
+# 0.005", so a band's *upper* bound is inclusive and the next band starts
+# strictly above it. lower_bound below is therefore one price unit past the
+# Schedule's boundary -- 0.251 rather than 0.250 -- because a price of exactly
+# 0.25 takes the narrower spread.
+#
+# tier is unused: unlike Japannext, SEHK spreads do not vary by index tier.
+#
+#          Schedule band            spread
+#          From  0.01 to     0.25    0.001
+#          Over  0.25 to    10.00    0.005
+#          Over 10.00 to    20.00    0.010
+#          Over 20.00 to    50.00    0.020
+#          Over 50.00 to   100.00    0.050
+#          Over   100 to      200    0.100
+#          Over   200 to      500    0.200
+#          Over   500 to    1,000    0.500
+#          Over 1,000 to    2,000    1.000
+#          Over 2,000 to    5,000    2.000
+#          Over 5,000 to    9,995    5.000
+lower_bound,tier,tick
+0.010,,0.001
+0.251,,0.005
+10.001,,0.010
+20.001,,0.020
+50.001,,0.050
+100.001,,0.100
+200.001,,0.200
+500.001,,0.500
+1000.001,,1.000
+2000.001,,2.000
+5000.001,,5.000

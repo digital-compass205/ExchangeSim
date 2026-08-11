@@ -1,0 +1,118 @@
+{
+  "name": "HKEX: trades, market orders and self-match prevention",
+
+  "begin_string": "FIXT.1.1",
+  "fix_port": 9011,
+  "control_port": 9102,
+  "server_comp_id": "HKEXSIM",
+  "logon_reset_flag": false,
+  "logon_fields": {"789": "1", "1137": "9", "1400": "101", "1402": "c2ltdWxhdG9y"},
+
+  "sessions": {
+    "seller": {"comp_id": "BROKER2"},
+    "buyer": {"comp_id": "BROKER1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "session.reset", "args": {"target_comp_id": "BROKER1"}},
+    {"control": "session.reset", "args": {"target_comp_id": "BROKER2"}},
+    {"control": "state.set", "args": {"market": "MAIN", "state": "OPEN"}},
+    {"control": "smp.register",
+     "args": {"id": "SMPPASSIVE", "instruction": "CANCEL_PASSIVE"},
+     "expect_result": {"instruction": "CANCEL_PASSIVE"}},
+
+    {"logon": "seller"},
+    {"logon": "buyer"},
+    {"clear": "seller"},
+    {"clear": "buyer"},
+
+    {"comment": "A resting offer, then a buy that lifts it",
+     "send": "seller",
+     "fields": {"35": "D", "11": "HK-S1",
+                "453": "1", "448": "1002", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "40": "2", "54": "2", "38": "200", "44": "395.800",
+                "1812": "1", "1813": "100", "1814": "1"}},
+    {"expect": "seller", "fields": {"35": "8", "11": "HK-S1", "150": "0"}},
+
+    {"send": "buyer",
+     "fields": {"35": "D", "11": "HK-B1",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "40": "2", "54": "1", "38": "100", "44": "395.800",
+                "1812": "1", "1813": "100", "1814": "1"}},
+
+    {"comment": "ExecType F is a fill in FIX 5.0; the taker is the aggressor",
+     "expect": "buyer",
+     "fields": {"35": "8", "11": "HK-B1", "150": "F", "39": "2",
+                "31": "395.800", "32": "100", "14": "100", "151": "0",
+                "574": "4", "1057": "Y"}},
+    {"expect": "seller",
+     "fields": {"35": "8", "11": "HK-S1", "150": "F", "39": "1",
+                "31": "395.800", "32": "100", "14": "100", "151": "100",
+                "1057": "N"}},
+
+    {"comment": "A market order needs no price and takes what is there",
+     "send": "buyer",
+     "fields": {"35": "D", "11": "HK-B2",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "40": "1", "54": "1", "38": "200",
+                "1812": "1", "1813": "100", "1814": "1"}},
+    {"expect": "buyer",
+     "fields": {"35": "8", "11": "HK-B2", "150": "F", "31": "395.800",
+                "32": "100"}},
+
+    {"comment": "and its unfillable balance expires rather than resting",
+     "expect": "buyer",
+     "fields": {"35": "8", "11": "HK-B2", "150": "C", "39": "C"}},
+
+    {"control": "bbo", "args": {"market": "MAIN", "symbol": "00700"},
+     "expect_result": {"bid": null, "ask": null}},
+
+    {"clear": "seller"},
+    {"clear": "buyer"},
+
+    {"comment": "Self-match prevention: the same SMP ID across two brokers",
+     "send": "seller",
+     "fields": {"35": "D", "11": "HK-S2",
+                "453": "1", "448": "1002", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "40": "2", "54": "2", "38": "100", "44": "395.800",
+                "2362": "SMPPASSIVE",
+                "1812": "1", "1813": "100", "1814": "1"}},
+    {"expect": "seller",
+     "fields": {"35": "8", "11": "HK-S2", "150": "0", "2362": "SMPPASSIVE"}},
+
+    {"send": "buyer",
+     "fields": {"35": "D", "11": "HK-B3",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "40": "2", "54": "1", "38": "100", "44": "395.800",
+                "2362": "SMPPASSIVE",
+                "1812": "1", "1813": "100", "1814": "1"}},
+
+    {"comment": "cancel-passive removes the resting side, reason 18",
+     "expect": "seller",
+     "fields": {"35": "8", "11": "HK-S2", "150": "4", "39": "4", "378": "18"}},
+    {"comment": "and the aggressor rests, having found nothing to trade with",
+     "expect": "buyer",
+     "fields": {"35": "8", "11": "HK-B3", "150": "0", "39": "0"}},
+    {"expect_none": "buyer", "fields": {"150": "F"}, "for": 0.4},
+
+    {"comment": "Mass cancel takes the whole session's book in one request",
+     "send": "buyer",
+     "fields": {"35": "q", "11": "HK-MC1", "530": "7",
+                "453": "1", "448": "1001", "447": "D", "452": "1"}},
+    {"expect": "buyer", "fields": {"35": "r", "11": "HK-MC1", "531": "7"}},
+    {"expect": "buyer",
+     "fields": {"35": "8", "11": "HK-B3", "150": "4", "378": "103"}},
+
+    {"control": "smp.clear", "args": {"id": "SMPPASSIVE"},
+     "expect_result": {"removed": true}},
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "buyer"},
+    {"logout": "seller"}
+  ]
+}

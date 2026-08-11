@@ -1,0 +1,50 @@
+# Templated systemd unit: one instance per venue.
+#
+#   systemctl enable --now exsimd@japannext
+#
+# The instance name (%i) selects /opt/exchangesim/config/<name>.json, so a
+# second exchange is a second config file and a second enable -- no unit
+# editing, and each venue restarts independently of the others.
+
+[Unit]
+Description=Exchange simulator (%i)
+Documentation=file:/opt/exchangesim/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=exsim
+Group=exsim
+WorkingDirectory=/opt/exchangesim
+
+# RHEL 8's platform-python is 3.6.8, which is what this targets. No virtual
+# environment and no dependencies to install.
+ExecStart=/usr/libexec/platform-python -m exchangesim.runner.main \
+          --config /opt/exchangesim/config/%i.json
+
+# Fail fast on a bad config rather than restart-looping.
+ExecStartPre=/usr/libexec/platform-python -m exchangesim.runner.main \
+             --config /opt/exchangesim/config/%i.json --check
+
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/exchangesim
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=exsimd-%i
+
+# The simulator needs nothing but its own directory and its listening ports.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/opt/exchangesim/var
+
+[Install]
+WantedBy=multi-user.target

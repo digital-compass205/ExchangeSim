@@ -1,0 +1,62 @@
+{
+  "name": "Market state: session status, halts, and orders expiring at close",
+
+  "sessions": {
+    "trader": {"comp_id": "CLIENT1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+    {"control": "state.clear", "args": {"market": "DAY", "symbol": "7203"}},
+
+    {"comment": "A client is told the state of each market at logon",
+     "logon": "trader", "reset": true},
+    {"expect": "trader", "fields": {"35": "h", "336": "DAY", "340": "2",
+                                    "339": "1"}},
+    {"expect": "trader", "fields": {"35": "h", "336": "NGHT", "340": "3"}},
+    {"clear": "trader"},
+
+    {"send": "trader",
+     "fields": {"35": "D", "11": "M5-RESTING", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "0"}},
+
+    {"comment": "Halting one instrument does not broadcast a session status",
+     "control": "state.set",
+     "args": {"market": "DAY", "symbol": "7203", "state": "HALTED"}},
+
+    {"comment": "but it does expire that instrument's resting orders",
+     "expect": "trader",
+     "fields": {"35": "8", "150": "4", "39": "4", "11": "M5-RESTING"}},
+
+    {"comment": "and new orders in it are refused while others are accepted",
+     "send": "trader",
+     "fields": {"35": "D", "11": "M5-HALTED", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "8", "103": "2"}},
+
+    {"send": "trader",
+     "fields": {"35": "D", "11": "M5-OTHER", "55": "6758", "54": "1",
+                "38": "100", "40": "2", "44": "13500.0"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "0", "11": "M5-OTHER"}},
+
+    {"comment": "Clearing the override returns the instrument to the market",
+     "control": "state.clear", "args": {"market": "DAY", "symbol": "7203"},
+     "expect_result": {"state": "OPEN"}},
+
+    {"send": "trader",
+     "fields": {"35": "D", "11": "M5-RESUMED", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "0", "11": "M5-RESUMED"}},
+
+    {"comment": "Closing the market broadcasts a status and expires the book",
+     "control": "state.set", "args": {"market": "DAY", "state": "CLOSED"}},
+    {"expect": "trader", "fields": {"35": "h", "336": "DAY", "340": "3"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "4", "11": "M5-RESUMED"}},
+
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "trader"}
+  ]
+}

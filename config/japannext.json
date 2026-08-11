@@ -1,0 +1,96 @@
+{
+  "venue": "japannext",
+  "name": "JNX-SIM",
+
+  "control": {
+    "host": "127.0.0.1",
+    "port": 9101,
+    "token": null
+  },
+
+  "log": {
+    "level": "INFO",
+    "file": null
+  },
+
+  "audit": {
+    "capacity": 2000
+  },
+
+  "fix": {
+    "host": "127.0.0.1",
+    "port": 9001,
+    "begin_string": "FIX.4.2",
+    "sender_comp_id": "JNXSIM",
+    "store": "../var/japannext/fix",
+
+    "sessions": [
+      {
+        "target_comp_id": "CLIENT1",
+        "heartbeat_interval": 30,
+        "default_sub_id": "DAY",
+        "markets": ["DAY", "NGHT", "DAYX", "DAYU"],
+        "cancel_on_disconnect": true,
+        "reset_on_logon": false
+      },
+      {
+        "target_comp_id": "CLIENT2",
+        "heartbeat_interval": 30,
+        "default_sub_id": "DAY",
+        "markets": ["DAY", "NGHT", "DAYX", "DAYU"],
+        "cancel_on_disconnect": false,
+        "reset_on_logon": false
+      }
+    ]
+  },
+
+  "markets": [
+    {
+      "name": "DAY",
+      "description": "J-Market Daytime Session",
+      "state": "CLOSED",
+      "stp_mode": "CANCEL_NEWEST"
+    },
+    {
+      "name": "NGHT",
+      "description": "J-Market Nighttime Session",
+      "state": "CLOSED",
+      "stp_mode": "CANCEL_NEWEST"
+    },
+    {
+      "name": "DAYX",
+      "description": "X-Market",
+      "state": "CLOSED",
+      "stp_mode": "CANCEL_NEWEST"
+    },
+    {
+      "name": "DAYU",
+      "description": "U-Market",
+      "state": "CLOSED",
+      "stp_mode": "CANCEL_NEWEST"
+    }
+  ],
+
+  "limits": {
+    "max_order_value": 100000000
+  },
+
+  "tape_length": 500,
+
+  "_reference": [
+    "Reference data defaults to the CSVs shipped in",
+    "exchangesim/venues/japannext/reference/. Override any of them here:",
+    "  \"reference\": {",
+    "    \"symbols\": \"reference/symbols.csv\",",
+    "    \"price_bands\": \"reference/price_bands_j.csv\",",
+    "    \"price_bands_u\": \"reference/price_bands_u.csv\",",
+    "    \"tick_sizes\": \"reference/tick_sizes_j.csv\",",
+    "    \"tick_sizes_x\": \"reference/tick_sizes_x.csv\",",
+    "    \"tick_sizes_u\": \"reference/tick_sizes_u.csv\"",
+    "  }",
+    "Paths are resolved relative to this file.",
+    "",
+    "'audit.capacity' is how many messages and control commands the audit view",
+    "keeps, newest wins. 0 switches recording off entirely."
+  ]
+}

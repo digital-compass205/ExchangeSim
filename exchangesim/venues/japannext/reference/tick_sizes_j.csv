@@ -1,0 +1,30 @@
+# J-Market tick sizes, by TOPIX tier.
+# Source: JNX_Trading_Rules_Equities_2.02, Appendix 3 (J-Market Tick Size).
+#
+# *** UNVERIFIED -- CHECK APPENDIX 3 BEFORE RELYING ON THESE VALUES ***
+#
+# Appendix 3 is a two-column table with vertically merged cells. Text
+# extraction recovers the tick values (0.1, 0.5, 1, 5, 10, 50, 100) and the
+# price thresholds, but not reliably which value belongs to which column and
+# row. The ladder below uses only values and thresholds that appear in the
+# appendix and is monotonic in price, but the exact bracket boundaries should
+# be confirmed against the published table -- open the PDF, or diff an order
+# rejection against the real test environment.
+#
+# Correcting this file is the whole fix: nothing in the code hard-codes ticks.
+#
+# An empty tier is the fallback for instruments whose tier is not listed.
+lower_bound,tier,tick
+0,TOPIX100,0.1
+3000,TOPIX100,0.5
+5000,TOPIX100,1
+30000,TOPIX100,5
+50000,TOPIX100,10
+300000,TOPIX100,50
+1000000,TOPIX100,100
+0,,0.1
+3000,,1
+50000,,5
+100000,,10
+500000,,50
+1000000,,100

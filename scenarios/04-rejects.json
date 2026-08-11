@@ -1,0 +1,73 @@
+{
+  "name": "Order rejections: every OrdRejReason the specification lists",
+
+  "sessions": {
+    "trader": {"comp_id": "CLIENT1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+    {"control": "state.set", "args": {"market": "NGHT", "state": "CLOSED"}},
+
+    {"logon": "trader", "reset": true},
+    {"clear": "trader"},
+
+    {"comment": "1 = unknown symbol",
+     "send": "trader",
+     "fields": {"35": "D", "11": "R4-SYMBOL", "55": "0001", "54": "1",
+                "38": "100", "40": "2", "44": "1000.0"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "8", "39": "8",
+                                    "103": "1", "11": "R4-SYMBOL"}},
+
+    {"comment": "2 = venue closed (the night market is shut)",
+     "send": "trader", "sub_id": "NGHT",
+     "fields": {"35": "D", "11": "R4-CLOSED", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "8", "103": "2"}},
+
+    {"comment": "3 = exceeds limit; 7203 has 16,000,000 shares so the cap is 800,000",
+     "send": "trader",
+     "fields": {"35": "D", "11": "R4-QTYCAP", "55": "7203", "54": "1",
+                "38": "800100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "8", "103": "3"}},
+
+    {"comment": "13 = incorrect quantity; the lot size is 100",
+     "send": "trader",
+     "fields": {"35": "D", "11": "R4-ODDLOT", "55": "7203", "54": "1",
+                "38": "150", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "8", "103": "13"}},
+
+    {"comment": "16 = outside the price band; 7203's range is 2345.5 to 3345.5",
+     "send": "trader",
+     "fields": {"35": "D", "11": "R4-BAND", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "3346.0"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "8", "103": "16"}},
+
+    {"comment": "6 = duplicate ClOrdID, reported with OrderID NONE",
+     "send": "trader",
+     "fields": {"35": "D", "11": "R4-DUP", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "0", "11": "R4-DUP"}},
+    {"send": "trader",
+     "fields": {"35": "D", "11": "R4-DUP", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "8", "150": "8", "103": "6",
+                                    "37": "NONE"}},
+
+    {"comment": "A session-level Reject, not a business one, for a bad enum",
+     "send": "trader",
+     "fields": {"35": "D", "11": "R4-ORDTYPE", "55": "7203", "54": "1",
+                "38": "100", "40": "1", "44": "2845.5"}},
+    {"expect": "trader", "fields": {"35": "3", "373": "5", "371": "40"}},
+
+    {"comment": "Price precision beyond one decimal place is refused",
+     "send": "trader",
+     "fields": {"35": "D", "11": "R4-PRECISION", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.55"}},
+    {"expect": "trader", "fields": {"35": "3", "373": "5", "371": "44"}},
+
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "trader"}
+  ]
+}

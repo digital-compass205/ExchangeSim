@@ -1,0 +1,8 @@
+# The deployment target is RHEL 8; development happens on Windows. Normalise
+# everything to LF in the repository and on checkout so files copied to the
+# server never carry CRLF.
+* text=auto eol=lf
+
+# Binary assets must not be touched.
+*.pdf binary
+*.pcap binary

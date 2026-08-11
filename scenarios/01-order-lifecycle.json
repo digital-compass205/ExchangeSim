@@ -1,0 +1,55 @@
+{
+  "name": "Order lifecycle: new, replace, cancel",
+
+  "sessions": {
+    "trader": {"comp_id": "CLIENT1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+
+    {"logon": "trader", "reset": true},
+    {"clear": "trader"},
+
+    {"comment": "A resting limit order is acknowledged with CumQty 0",
+     "send": "trader",
+     "fields": {"35": "D", "11": "L1-NEW", "55": "7203", "54": "1",
+                "38": "200", "40": "2", "44": "2845.5"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "0", "39": "0", "11": "L1-NEW",
+                "38": "200", "14": "0", "151": "200", "6": "0.0000",
+                "44": "2845.5"}},
+
+    {"comment": "Amending price and quantity is confirmed as Replaced",
+     "send": "trader",
+     "fields": {"35": "G", "11": "L1-AMEND", "41": "L1-NEW", "55": "7203",
+                "54": "1", "38": "300", "40": "2", "44": "2845.0"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "5", "39": "5", "11": "L1-AMEND",
+                "41": "L1-NEW", "38": "300", "44": "2845.0"}},
+
+    {"comment": "The superseded ClOrdID is no longer a valid handle",
+     "send": "trader",
+     "fields": {"35": "F", "11": "L1-STALE", "41": "L1-NEW", "55": "7203",
+                "54": "1", "38": "300"}},
+    {"expect": "trader",
+     "fields": {"35": "9", "102": "1", "434": "1", "11": "L1-STALE"}},
+
+    {"comment": "Cancelling by the current ClOrdID succeeds",
+     "send": "trader",
+     "fields": {"35": "F", "11": "L1-CANCEL", "41": "L1-AMEND", "55": "7203",
+                "54": "1", "38": "300"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "4", "39": "4", "11": "L1-CANCEL",
+                "41": "L1-AMEND", "151": "0"}},
+
+    {"comment": "Cancelling twice is too late",
+     "send": "trader",
+     "fields": {"35": "F", "11": "L1-CANCEL2", "41": "L1-CANCEL", "55": "7203",
+                "54": "1", "38": "300"}},
+    {"expect": "trader", "fields": {"35": "9", "102": "0"}},
+
+    {"logout": "trader"}
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "name": "HKEX: order lifecycle over FIXT.1.1",
+
+  "begin_string": "FIXT.1.1",
+  "fix_port": 9011,
+  "control_port": 9102,
+  "server_comp_id": "HKEXSIM",
+  "logon_reset_flag": false,
+  "logon_fields": {"789": "1", "1137": "9", "1400": "101", "1402": "c2ltdWxhdG9y"},
+
+  "sessions": {
+    "broker": {"comp_id": "BROKER1"}
+  },
+
+  "steps": [
+    {"comment": "HKEX will not honour a client-initiated reset, so the venue is",
+     "control": "session.reset", "args": {"target_comp_id": "BROKER1"}},
+    {"control": "session.reset", "args": {"target_comp_id": "BROKER2"}},
+    {"control": "state.set", "args": {"market": "MAIN", "state": "OPEN"}},
+    {"control": "state.set", "args": {"market": "GEM", "state": "OPEN"}},
+
+    {"logon": "broker"},
+    {"clear": "broker"},
+
+    {"comment": "A board-lot limit order, with the Parties and Disclosure groups",
+     "send": "broker",
+     "fields": {"35": "D", "11": "HK-A1",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "40": "2", "54": "1", "38": "100", "44": "393.000",
+                "1812": "1", "1813": "100", "1814": "1"}},
+    {"expect": "broker",
+     "fields": {"35": "8", "11": "HK-A1", "150": "0", "39": "0",
+                "151": "100", "48": "00700", "1093": "2", "1128": "9"}},
+
+    {"comment": "Amend: FIX 5.0 reports ExecType 5 with a live OrdStatus",
+     "send": "broker",
+     "fields": {"35": "G", "11": "HK-A2", "41": "HK-A1",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "40": "2", "54": "1", "38": "200", "44": "393.200",
+                "1812": "1", "1813": "100", "1814": "1"}},
+    {"expect": "broker",
+     "fields": {"35": "8", "11": "HK-A2", "41": "HK-A1", "150": "5", "39": "0",
+                "38": "200", "44": "393.200"}},
+
+    {"comment": "OrigClOrdID is the order's current ClOrdID, not its first",
+     "send": "broker",
+     "fields": {"35": "F", "11": "HK-A3", "41": "HK-A2",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "54": "1", "38": "200"}},
+    {"expect": "broker",
+     "fields": {"35": "8", "11": "HK-A3", "41": "HK-A2", "150": "4", "39": "4",
+                "151": "0"}},
+
+    {"comment": "Cancelling it again is refused, the order being gone",
+     "send": "broker",
+     "fields": {"35": "F", "11": "HK-A4", "41": "HK-A2",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "00700", "22": "8", "207": "XHKG",
+                "54": "1", "38": "200"}},
+    {"expect": "broker", "fields": {"35": "9", "11": "HK-A4", "102": "1",
+                                    "434": "1"}},
+
+    {"comment": "A GEM security reaches a different book entirely",
+     "send": "broker",
+     "fields": {"35": "D", "11": "HK-A5",
+                "453": "1", "448": "1001", "447": "D", "452": "1",
+                "48": "08083", "22": "8", "207": "XHKG",
+                "40": "2", "54": "1", "38": "2000", "44": "0.235",
+                "1812": "1", "1813": "100", "1814": "1"}},
+    {"expect": "broker", "fields": {"35": "8", "11": "HK-A5", "150": "0"}},
+
+    {"control": "bbo", "args": {"market": "GEM", "symbol": "08083"},
+     "expect_result": {"bid": "0.235", "bid_qty": 2000, "ask": null}},
+    {"comment": "and nothing of it appears on the Main Board",
+     "control": "bbo", "args": {"market": "MAIN", "symbol": "00700"},
+     "expect_result": {"bid": null, "ask": null}},
+
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "broker"}
+  ]
+}

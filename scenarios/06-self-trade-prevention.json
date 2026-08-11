@@ -1,0 +1,59 @@
+{
+  "name": "Self-trade prevention: Cancel Newest and Cancel Oldest",
+
+  "sessions": {
+    "buyer": {"comp_id": "CLIENT1"},
+    "seller": {"comp_id": "CLIENT2"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+    {"control": "stp.set", "args": {"market": "DAY", "mode": "CANCEL_NEWEST"}},
+
+    {"logon": "seller", "reset": true},
+    {"logon": "buyer", "reset": true},
+    {"clear": "seller"},
+    {"clear": "buyer"},
+
+    {"comment": "Both orders carry the same MPID in ClientID(109)",
+     "send": "seller",
+     "fields": {"35": "D", "11": "P6-SELL", "55": "7203", "54": "2",
+                "38": "100", "40": "2", "44": "2846.0", "109": "100000001"}},
+    {"expect": "seller", "fields": {"35": "8", "150": "0", "109": "100000001"}},
+
+    {"comment": "Cancel Newest cancels the incoming order with reason 100",
+     "send": "buyer",
+     "fields": {"35": "D", "11": "P6-BUY", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2846.0", "109": "100000001"}},
+    {"expect": "buyer",
+     "fields": {"35": "8", "150": "4", "39": "4", "11": "P6-BUY",
+                "378": "100", "14": "0"}},
+    {"comment": "and leaves the resting order alone",
+     "expect_none": "seller", "for": 0.4},
+
+    {"comment": "Under Cancel Oldest the resting order goes instead",
+     "control": "stp.set", "args": {"market": "DAY", "mode": "CANCEL_OLDEST"}},
+    {"send": "buyer",
+     "fields": {"35": "D", "11": "P6-BUY2", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2846.0", "109": "100000001"}},
+    {"expect": "seller",
+     "fields": {"35": "8", "150": "4", "39": "4", "11": "P6-SELL",
+                "378": "100"}},
+    {"comment": "and the incoming order rests, having found no other liquidity",
+     "expect": "buyer", "fields": {"35": "8", "150": "0", "11": "P6-BUY2"}},
+
+    {"comment": "Different MPIDs trade normally",
+     "send": "seller",
+     "fields": {"35": "D", "11": "P6-SELL3", "55": "7203", "54": "2",
+                "38": "100", "40": "2", "44": "2846.0", "109": "100000002"}},
+    {"expect": "buyer", "fields": {"35": "8", "150": "2", "11": "P6-BUY2",
+                                   "32": "100"}},
+    {"expect": "seller", "fields": {"35": "8", "150": "2", "11": "P6-SELL3"}},
+
+    {"control": "stp.set", "args": {"market": "DAY", "mode": "CANCEL_NEWEST"}},
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "buyer"},
+    {"logout": "seller"}
+  ]
+}

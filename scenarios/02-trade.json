@@ -1,0 +1,55 @@
+{
+  "name": "Two clients trade: shared TrdMatchID, opposite liquidity flags",
+
+  "sessions": {
+    "buyer": {"comp_id": "CLIENT1"},
+    "seller": {"comp_id": "CLIENT2"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+
+    {"logon": "seller", "reset": true},
+    {"logon": "buyer", "reset": true},
+    {"clear": "seller"},
+    {"clear": "buyer"},
+
+    {"comment": "Seller rests 300 at 2846.0",
+     "send": "seller",
+     "fields": {"35": "D", "11": "T2-SELL", "55": "7203", "54": "2",
+                "38": "300", "40": "2", "44": "2846.0"}},
+    {"expect": "seller", "fields": {"35": "8", "150": "0", "11": "T2-SELL"}},
+
+    {"comment": "Buyer lifts it with a more aggressive price",
+     "send": "buyer",
+     "fields": {"35": "D", "11": "T2-BUY", "55": "7203", "54": "1",
+                "38": "500", "40": "2", "44": "2850.0"}},
+
+    {"comment": "Execution is at the resting price, not the incoming one",
+     "expect": "buyer",
+     "fields": {"35": "8", "150": "1", "39": "1", "11": "T2-BUY",
+                "31": "2846.0", "32": "300", "14": "300", "151": "200",
+                "6": "2846.0000", "851": "2"}},
+
+    {"comment": "The maker is fully filled and flagged as having added liquidity",
+     "expect": "seller",
+     "fields": {"35": "8", "150": "2", "39": "2", "11": "T2-SELL",
+                "31": "2846.0", "32": "300", "14": "300", "151": "0",
+                "851": "1"}},
+
+    {"comment": "A partially filled order must not also be acknowledged as new",
+     "expect_none": "buyer", "fields": {"35": "8", "150": "0"}, "for": 0.4},
+
+    {"control": "bbo", "args": {"market": "DAY", "symbol": "7203"},
+     "expect_result": {"bid": "2850.0", "bid_qty": 200}},
+
+    {"send": "buyer",
+     "fields": {"35": "F", "11": "T2-CANCEL", "41": "T2-BUY", "55": "7203",
+                "54": "1", "38": "500"}},
+    {"expect": "buyer", "fields": {"35": "8", "150": "4"}},
+
+    {"logout": "buyer"},
+    {"logout": "seller"}
+  ]
+}

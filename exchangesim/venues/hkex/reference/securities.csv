@@ -1,0 +1,30 @@
+# SEHK securities universe.
+#
+# UNVERIFIED sample data. Symbols and board lots are real; base_price is a
+# plausible reference price, not a quotation, and shares_outstanding is rounded
+# hard. Edit this file and run `exsim reference reload` -- no restart needed.
+#
+# symbol     five-digit SEHK stock code, as SecurityID(48)
+# lot_size   board lot; SEHK board lots vary per security, unlike Japannext's 100
+# segment    MarketSegmentID(1300): MAIN, GEM, NASD or ETS
+# base_price the nominal price. It must itself be on the spread table's tick --
+#            tests/test_hkex.py asserts that for every row here.
+symbol,name,lot_size,base_price,tier,shares_outstanding,tradable,segment
+00001,CK Hutchison Holdings,500,42.500,,3850000000,Y,MAIN
+00005,HSBC Holdings,400,72.150,,17800000000,Y,MAIN
+00388,HKEX,100,285.400,,1268000000,Y,MAIN
+00700,Tencent Holdings,100,395.800,,9300000000,Y,MAIN
+00939,China Construction Bank,1000,6.180,,240000000000,Y,MAIN
+00941,China Mobile,500,72.900,,20500000000,Y,MAIN
+01299,AIA Group,200,58.350,,11100000000,Y,MAIN
+02318,Ping An Insurance,500,44.200,,18200000000,Y,MAIN
+03690,Meituan,100,118.700,,6200000000,Y,MAIN
+09988,Alibaba Group,100,82.450,,19000000000,Y,MAIN
+00981,SMIC,500,22.140,,7900000000,Y,MAIN
+# A cheap name, to exercise the narrow end of the spread table.
+00179,Johnson Electric,500,9.480,,920000000,Y,MAIN
+# GEM securities sit on their own market segment and their own book.
+08083,China Ocean Group,2000,0.235,,1500000000,Y,GEM
+08192,Prime Intelligence,10000,0.088,,2400000000,Y,GEM
+# Suspended: accepted by reference data, refused by validation.
+00028,Tianteng Suspended,2000,1.240,,300000000,N,MAIN

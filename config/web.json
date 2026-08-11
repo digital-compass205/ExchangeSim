@@ -1,0 +1,51 @@
+{
+  "http": {
+    "host": "127.0.0.1",
+    "port": 9200
+  },
+
+  "log": {
+    "level": "INFO",
+    "file": null
+  },
+
+  "allow_order_entry": true,
+  "allow_market_control": true,
+  "allow_audit": true,
+
+  "venues": [
+    {
+      "key": "japannext",
+      "label": "Japannext",
+      "host": "127.0.0.1",
+      "port": 9101,
+      "token": null
+    },
+    {
+      "key": "hkex",
+      "label": "HKEX",
+      "host": "127.0.0.1",
+      "port": 9102,
+      "token": null
+    }
+  ],
+
+  "_notes": [
+    "One entry per running venue: 'port' is that venue's control.port, not its",
+    "FIX port. A venue that is down shows as disconnected and is redialled",
+    "automatically, so the order in which processes start does not matter.",
+    "",
+    "'token' must match that venue's control.token when it sets one. The token",
+    "stays in this process; the browser never sees it.",
+    "",
+    "Set allow_order_entry to false to serve a board that cannot trade, and",
+    "allow_market_control to false to serve one that cannot move a market",
+    "between phases. They are separate switches because they are different",
+    "powers: closing a market expires every resting order on it, other",
+    "clients' included. Both false is a read-only board.",
+    "",
+    "allow_audit is a third switch, for the message audit view. It shows",
+    "every client's traffic, so a board that may not place an order should",
+    "not thereby be able to read everyone else's."
+  ]
+}

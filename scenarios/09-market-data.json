@@ -1,0 +1,61 @@
+{
+  "name": "Market data: the ita ladder over a known book",
+
+  "sessions": {
+    "trader": {"comp_id": "CLIENT1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+    {"control": "stats.reset", "args": {"market": "DAY", "symbol": "7203"}},
+
+    {"logon": "trader", "reset": true},
+    {"clear": "trader"},
+
+    {"comment": "Two near orders and two far ones, so the window has an outside",
+     "send": "trader",
+     "fields": {"35": "D", "11": "MD-B1", "55": "7203", "54": "1",
+                "38": "500", "40": "2", "44": "2845.4"}},
+    {"send": "trader",
+     "fields": {"35": "D", "11": "MD-B2", "55": "7203", "54": "1",
+                "38": "200", "40": "2", "44": "2840.0"}},
+    {"send": "trader",
+     "fields": {"35": "D", "11": "MD-S1", "55": "7203", "54": "2",
+                "38": "400", "40": "2", "44": "2845.6"}},
+    {"send": "trader",
+     "fields": {"35": "D", "11": "MD-S2", "55": "7203", "54": "2",
+                "38": "300", "40": "2", "44": "2850.0"}},
+    {"clear": "trader"},
+
+    {"comment": "The ladder centres on the mid and accounts for the far orders",
+     "control": "ladder",
+     "args": {"market": "DAY", "symbol": "7203", "rows": 2},
+     "expect_result": {"anchor": "2845.5", "tick": "0.1",
+                       "over": 300, "under": 200,
+                       "limit_up": "3345.5", "limit_down": "2345.5"}},
+
+    {"control": "bbo", "args": {"market": "DAY", "symbol": "7203"},
+     "expect_result": {"bid": "2845.4", "ask": "2845.6", "spread": "0.2",
+                       "bid_qty": 500, "ask_qty": 400}},
+
+    {"comment": "A trade moves the last price the ladder reports",
+     "send": "trader",
+     "fields": {"35": "D", "11": "MD-X1", "55": "7203", "54": "1",
+                "38": "100", "40": "2", "44": "2845.6"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "2", "31": "2845.6", "32": "100"}},
+
+    {"control": "ladder",
+     "args": {"market": "DAY", "symbol": "7203", "rows": 2},
+     "expect_result": {"last": "2845.6"}},
+
+    {"comment": "A symbol with no book at all still returns a centred ladder",
+     "control": "ladder",
+     "args": {"market": "DAY", "symbol": "6861", "rows": 1},
+     "expect_result": {"anchor": "62000.0", "over": 0, "under": 0}},
+
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "trader"}
+  ]
+}

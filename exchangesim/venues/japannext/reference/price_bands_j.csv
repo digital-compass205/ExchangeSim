@@ -1,0 +1,41 @@
+# Daily price range for J-Market and X-Market.
+# Source: JNX_Trading_Rules_Equities_2.02, Appendix 1 (Price Range).
+#
+# Each row is the inclusive lower bound of a base-price bracket and the
+# permitted range either side of the base price. A base price falls in the
+# bracket with the greatest lower bound not exceeding it.
+lower_bound,band
+0,30
+100,50
+200,80
+500,100
+700,150
+1000,300
+1500,400
+2000,500
+3000,700
+5000,1000
+7000,1500
+10000,3000
+15000,4000
+20000,5000
+30000,7000
+50000,10000
+70000,15000
+100000,30000
+150000,40000
+200000,50000
+300000,70000
+500000,100000
+700000,150000
+1000000,300000
+1500000,400000
+2000000,500000
+3000000,700000
+5000000,1000000
+7000000,1500000
+10000000,3000000
+15000000,4000000
+20000000,5000000
+30000000,7000000
+50000000,10000000

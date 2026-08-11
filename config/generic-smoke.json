@@ -1,0 +1,15 @@
+{
+  "venue": "generic",
+  "name": "SMOKE",
+
+  "control": {
+    "host": "127.0.0.1",
+    "port": 9199,
+    "token": null
+  },
+
+  "log": {
+    "level": "INFO",
+    "file": null
+  }
+}

@@ -1,0 +1,24 @@
+# Instrument universe for the simulator.
+#
+# Symbol is the Securities Identification Code Committee (SICC) code, which is
+# what Symbol(55) carries on the wire. The real venue publishes roughly 4,000
+# tradable names daily; this is a small representative set for testing.
+#
+# base_price, shares_outstanding and tier are TEST DATA, not market data. The
+# base price drives the daily price band and the tier drives tick size, so
+# adjust them to put the band and tick wherever a test needs them.
+#
+# tier values must match the tier column in the tick-size tables.
+symbol,name,lot_size,base_price,tier,shares_outstanding,tradable
+7203,Toyota Motor,100,2845.5,TOPIX100,16000000,y
+6758,Sony Group,100,13500,TOPIX100,12000000,y
+9984,SoftBank Group,100,8200,TOPIX100,14000000,y
+8306,Mitsubishi UFJ Financial,100,1580.5,TOPIX100,120000000,y
+6861,Keyence,100,62000,TOPIX100,2400000,y
+9432,Nippon Telegraph and Telephone,100,152.3,TOPIX100,900000000,y
+4063,Shin-Etsu Chemical,100,5420,TOPIX100,20000000,y
+6098,Recruit Holdings,100,7150,TOPIX100,16000000,y
+8035,Tokyo Electron,100,24500,TOPIX100,4700000,y
+7974,Nintendo,100,8900,TOPIX100,12000000,y
+1301,Kyokuyo,100,3450,,2000000,y
+9999,Suspended Test Name,100,1000,,1000000,n

@@ -1,0 +1,63 @@
+{
+  "name": "Reference data: add and remove an instrument without a restart",
+
+  "sessions": {
+    "trader": {"comp_id": "CLIENT1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+
+    {"comment": "A symbol the shipped universe does not contain",
+     "control": "instrument.add",
+     "args": {"symbol": "8888", "name": "Scenario Listing",
+              "base_price": "1000", "lot_size": 100,
+              "shares_outstanding": 2000000}},
+
+    {"logon": "trader", "reset": true},
+    {"clear": "trader"},
+
+    {"comment": "The new symbol is orderable immediately, with its own band",
+     "send": "trader",
+     "fields": {"35": "D", "11": "REF-NEW", "55": "8888", "54": "1",
+                "38": "100", "40": "2", "44": "1000.0"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "0", "39": "0", "11": "REF-NEW",
+                "55": "8888", "38": "100", "151": "100"}},
+
+    {"comment": "base 1000 sits in the 300 band bracket, so 1400 is outside it",
+     "send": "trader",
+     "fields": {"35": "D", "11": "REF-BAND", "55": "8888", "54": "1",
+                "38": "100", "40": "2", "44": "1400.0"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "8", "39": "8", "11": "REF-BAND",
+                "103": "16"}},
+
+    {"comment": "Removal is refused while the first order still rests",
+     "control": "instrument.remove", "args": {"symbol": "8888"},
+     "expect_error": "conflict"},
+
+    {"send": "trader",
+     "fields": {"35": "F", "11": "REF-CANCEL", "41": "REF-NEW", "55": "8888",
+                "54": "1", "38": "100"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "4", "39": "4", "11": "REF-CANCEL"}},
+
+    {"control": "instrument.remove", "args": {"symbol": "8888"}},
+
+    {"comment": "Once removed the venue no longer knows the symbol",
+     "send": "trader",
+     "fields": {"35": "D", "11": "REF-GONE", "55": "8888", "54": "1",
+                "38": "100", "40": "2", "44": "1000.0"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "8", "39": "8", "11": "REF-GONE",
+                "103": "1"}},
+
+    {"comment": "Reloading the CSVs leaves the shipped universe intact",
+     "control": "reference.reload"},
+    {"control": "instruments", "args": {"symbol": "7203"}},
+
+    {"logout": "trader"}
+  ]
+}

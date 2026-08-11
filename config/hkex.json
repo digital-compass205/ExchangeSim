@@ -1,0 +1,102 @@
+{
+  "venue": "hkex",
+  "name": "HKEX-SIM",
+
+  "control": {
+    "host": "127.0.0.1",
+    "port": 9102,
+    "token": null
+  },
+
+  "log": {
+    "level": "INFO",
+    "file": null
+  },
+
+  "audit": {
+    "capacity": 2000
+  },
+
+  "fix": {
+    "host": "127.0.0.1",
+    "port": 9011,
+    "begin_string": "FIXT.1.1",
+    "sender_comp_id": "HKEXSIM",
+    "store": "../var/hkex/fix",
+
+    "sessions": [
+      {
+        "target_comp_id": "BROKER1",
+        "heartbeat_interval": 20,
+        "markets": ["MAIN", "GEM"],
+        "cancel_on_disconnect": true
+      },
+      {
+        "target_comp_id": "BROKER2",
+        "heartbeat_interval": 20,
+        "markets": ["MAIN", "GEM"],
+        "cancel_on_disconnect": false
+      }
+    ]
+  },
+
+  "markets": [
+    {
+      "name": "MAIN",
+      "description": "Main Board",
+      "state": "CLOSED"
+    },
+    {
+      "name": "GEM",
+      "description": "GEM",
+      "state": "CLOSED"
+    }
+  ],
+
+  "smp": [
+    {"id": "SMP0001", "instruction": "CANCEL_AGGRESSIVE"},
+    {"id": "SMP0002", "instruction": "CANCEL_PASSIVE"}
+  ],
+
+  "limits": {
+    "quotation_spreads": 24,
+    "aggression_spreads": 9
+  },
+
+  "tape_length": 500,
+
+  "_notes": [
+    "Markets are SEHK market segments (MarketSegmentID 1300). Unlike Japannext",
+    "there is no SubID routing: a security belongs to exactly one segment, set",
+    "by the 'segment' column of reference/securities.csv, and that decides",
+    "which book an order reaches.",
+    "",
+    "Auctions run in the PRE_OPEN/OPENING_AUCTION (POS) and CLOSING_AUCTION",
+    "(CAS) phases. There are no timings: 'state.set' opens the session,",
+    "'auction.lock' ends the input period and 'state.set' uncrosses.",
+    "",
+    "'smp' pre-registers SelfMatchPreventionID(2362) instructions, which the",
+    "real exchange holds out of band. Add more at runtime with the",
+    "'smp.register' control command. An unregistered ID defaults to",
+    "CANCEL_AGGRESSIVE.",
+    "",
+    "Two separate price rules apply. The 9-times rule is against the static",
+    "nominal price and is not configurable, being a Rule of the Exchange. The",
+    "quotation rule is against the live BBO: a limit price may sit at most",
+    "quotation_spreads ticks behind its own side's best and reach at most",
+    "aggression_spreads ticks through the other side's.",
+    "limits.max_order_value is unset by default -- HKEX's notional threshold is",
+    "not published in the FIX specification.",
+    "",
+    "Reference data defaults to the CSVs in exchangesim/venues/hkex/reference/.",
+    "Override with:",
+    "  \"reference\": {",
+    "    \"securities\": \"reference/securities.csv\",",
+    "    \"spread_table\": \"reference/spread_table.csv\"",
+    "  }",
+    "Paths are resolved relative to this file.",
+    "",
+    "'audit.capacity' is how many messages and control commands the audit view",
+    "keeps, newest wins. 0 switches recording off entirely."
+  ]
+}

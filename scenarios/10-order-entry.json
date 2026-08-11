@@ -1,0 +1,61 @@
+{
+  "name": "Injected order entry: a control-plane order meets a FIX client",
+
+  "sessions": {
+    "trader": {"comp_id": "CLIENT1"}
+  },
+
+  "steps": [
+    {"control": "orders.cancel_all", "args": {"text": "scenario setup"}},
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+
+    {"logon": "trader", "reset": true},
+    {"clear": "trader"},
+
+    {"comment": "A real client rests an offer",
+     "send": "trader",
+     "fields": {"35": "D", "11": "OE-S1", "55": "7203", "54": "2",
+                "38": "100", "40": "2", "44": "2845.5"}},
+    {"expect": "trader",
+     "fields": {"35": "8", "150": "0", "11": "OE-S1", "151": "100"}},
+
+    {"comment": "An order entered through the control plane lifts it",
+     "control": "order.new",
+     "args": {"market": "DAY", "symbol": "7203", "side": "BUY",
+              "quantity": 100, "price": "2845.5", "owner": "SCN"},
+     "expect_result": {"owner": "SCN"}},
+
+    {"comment": "The resting client is told, with the injected side as aggressor",
+     "expect": "trader",
+     "fields": {"35": "8", "150": "2", "39": "2", "11": "OE-S1",
+                "32": "100", "31": "2845.5", "151": "0", "851": "1"}},
+
+    {"comment": "Nothing further is invented for the injected side",
+     "expect_none": "trader"},
+
+    {"comment": "An injected order that rests is visible and cancellable",
+     "control": "order.new",
+     "args": {"market": "DAY", "symbol": "7203", "side": "BUY",
+              "quantity": 200, "price": "2845.0", "owner": "SCN",
+              "cl_ord_id": "OE-W1"}},
+
+    {"comment": "Validation is the same as over FIX: this one is off-band",
+     "control": "order.new",
+     "args": {"market": "DAY", "symbol": "7203", "side": "BUY",
+              "quantity": 100, "price": "9999.0", "owner": "SCN"}},
+
+    {"comment": "An unknown symbol is refused outright, not rejected as an order",
+     "control": "order.new",
+     "args": {"market": "DAY", "symbol": "0000", "side": "BUY",
+              "quantity": 100, "price": "100.0"},
+     "expect_error": "not_found"},
+
+    {"comment": "Order entry is refused while the market is closed",
+     "control": "state.set", "args": {"market": "DAY", "state": "CLOSED"}},
+    {"clear": "trader"},
+
+    {"control": "state.set", "args": {"market": "DAY", "state": "OPEN"}},
+    {"control": "orders.cancel_all", "args": {"text": "scenario teardown"}},
+    {"logout": "trader"}
+  ]
+}

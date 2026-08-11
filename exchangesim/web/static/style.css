@@ -1,0 +1,664 @@
+/* A trading board: dark, dense, monospaced numbers.
+   Prices are aligned on a tabular figure width so a ladder column reads as one
+   number per row rather than as ragged text. */
+
+:root {
+  --bg: #12151b;
+  --panel: #191d26;
+  --panel-edge: #262c38;
+  --ink: #d8dde7;
+  --ink-dim: #8b93a3;
+  --ink-faint: #5b6373;
+
+  /* Japanese boards put asks (sell) on the left and bids (buy) on the right,
+     and they colour by direction rather than by warm/cool: buying is red,
+     selling is green. That is the reverse of the Western convention, so it is
+     stated here once rather than left to be inferred from two hex values. */
+  --ask: #4cae62;
+  --ask-bg: rgba(76, 174, 98, 0.16);
+  --bid: #e0736b;
+  --bid-bg: rgba(224, 115, 107, 0.14);
+
+  --accent: #d9a441;
+  --ok: #6fbf73;
+  --down: #d2564b;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+h2 {
+  margin: 0;
+  padding: 0.55rem 0.75rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  border-bottom: 1px solid var(--panel-edge);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* -- top bar ------------------------------------------------------------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--panel-edge);
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.bar label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+}
+
+select, input[type="number"] {
+  background: #0e1116;
+  color: var(--ink);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+}
+
+.name { color: var(--ink-dim); }
+.spacer { flex: 1; }
+
+.badge {
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  border: 1px solid currentColor;
+}
+.badge-open { color: var(--ok); }
+.badge-closed { color: var(--ink-faint); }
+.badge-halted { color: var(--down); }
+.badge-auction { color: var(--accent); }
+.badge-unknown { color: var(--ink-faint); }
+
+/* Market control sits next to the badge that shows the phase, so the reading
+   and the changing of it are in one place. */
+.control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.control select { font-size: 11px; padding: 0.15rem 0.35rem; }
+
+.control button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0.18rem 0.6rem;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.control button:hover { background: rgba(217, 164, 65, 0.16); }
+
+.view-toggle {
+  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  padding: 0.18rem 0.7rem;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.view-toggle:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+.feed { font-size: 11px; letter-spacing: 0.06em; }
+.feed-live { color: var(--ok); }
+.feed-live::before { content: "\25CF  "; }
+.feed-down { color: var(--down); }
+.feed-down::before { content: "\25CF  "; }
+
+/* -- layout -------------------------------------------------------------- */
+
+main {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.1fr) minmax(280px, 1fr);
+  gap: 0.75rem;
+  padding: 0.75rem;
+  align-items: start;
+}
+
+/* `display: grid` above outranks the user agent's own `[hidden] {display:none}`,
+   so without this the hidden view stays on screen while reporting itself
+   hidden -- which is exactly what happened the first time. */
+main[hidden] { display: none; }
+
+/* Level 1 shares the depth board's column and sits directly on top of it: one
+   instrument's price at two depths, so they read as one stack of one width. */
+
+/* The audit is its own <main>: a list of everything said, and the fields of
+   whichever entry is selected, so one can be read while the other scrolls. */
+main#audit-view {
+  grid-template-columns: minmax(360px, 1.5fr) minmax(320px, 1fr);
+  align-items: stretch;
+  height: calc(100vh - 3.4rem);
+}
+
+@media (max-width: 900px) {
+  main { grid-template-columns: 1fr; }
+  main#audit-view { height: auto; }
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+/* -- order ticket -------------------------------------------------------- */
+
+.owner {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+}
+
+#order-form { padding: 0.7rem 0.75rem 0.8rem; }
+
+.sides { display: flex; gap: 1px; margin-bottom: 0.6rem; }
+
+.side {
+  flex: 1;
+  text-align: center;
+  padding: 0.4rem;
+  border: 1px solid var(--panel-edge);
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: #0e1116;
+}
+.side input { position: absolute; opacity: 0; pointer-events: none; }
+.side-buy { border-radius: 3px 0 0 3px; }
+.side-sell { border-radius: 0 3px 3px 0; }
+.side:focus-within { outline: 1px solid var(--accent); }
+
+/* Selection is marked by a class the script sets, rather than by :has(), which
+   is too recent to assume in a tool that may be opened from an old browser. */
+.side-buy.selected {
+  background: var(--bid-bg); color: var(--bid); border-color: var(--bid);
+}
+.side-sell.selected {
+  background: var(--ask-bg); color: var(--ask); border-color: var(--ask);
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem 0.6rem;
+}
+
+.fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.fields input, .fields select {
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+
+#order-submit {
+  margin-top: 0.65rem;
+  width: 100%;
+  padding: 0.45rem;
+  background: var(--accent);
+  color: #16181d;
+  border: 0;
+  border-radius: 3px;
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+#order-submit:hover { filter: brightness(1.1); }
+#order-submit:disabled { opacity: 0.5; cursor: default; }
+
+.result {
+  margin: 0.5rem 0 0;
+  min-height: 1.2em;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.result.ok { color: var(--ok); }
+.result.bad { color: var(--down); }
+
+/* A ladder price is clickable: it fills the ticket rather than being retyped. */
+.ita td.price-col { cursor: pointer; }
+.ita tbody tr:hover td.price-col { background: rgba(217, 164, 65, 0.12); }
+
+/* -- blotter ------------------------------------------------------------- */
+
+.orders th, .orders td {
+  padding: 0.2rem 0.6rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.orders th {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: left;
+  border-bottom: 1px solid var(--panel-edge);
+  padding-top: 0.5rem;
+  padding-bottom: 0.4rem;
+}
+.orders td.num, .orders th.num { text-align: right; }
+.orders td.side { text-align: left; }
+.orders th:last-child, .orders td:last-child { width: 99%; }
+.orders tr.buy td.side { color: var(--bid); }
+.orders tr.sell td.side { color: var(--ask); }
+.orders tr.none td { color: var(--ink-faint); padding: 0.7rem; }
+
+.orders button {
+  background: transparent;
+  color: var(--ink-faint);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 10px;
+  padding: 0.05rem 0.35rem;
+  cursor: pointer;
+}
+.orders button:hover { color: var(--down); border-color: var(--down); }
+
+/* -- level 1 ------------------------------------------------------------- */
+
+.quotes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--panel-edge);
+}
+
+.quote {
+  background: var(--panel);
+  padding: 0.7rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.quote-label {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.quote-price {
+  font-variant-numeric: tabular-nums;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.quote.bid .quote-price { color: var(--bid); }
+.quote.ask .quote-price { color: var(--ask); }
+.quote.last .quote-price { color: var(--ink); }
+
+.quote-qty {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--ink-dim);
+  min-height: 1em;
+}
+
+.stats {
+  margin: 0;
+  padding: 0.6rem 0.75rem 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.3rem 1rem;
+}
+
+.stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  border-bottom: 1px dotted var(--panel-edge);
+  padding-bottom: 0.15rem;
+}
+
+/* A value too long to sit beside a sibling: the auction's deciding rule. */
+.stats > div.wide { grid-column: 1 / -1; }
+
+.stats dt { color: var(--ink-faint); font-size: 11px; }
+.stats dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+/* -- the ita board ------------------------------------------------------- */
+
+.rows {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.rows input { width: 4.2rem; }
+
+table { width: 100%; border-collapse: collapse; }
+
+.ita th, .ita td {
+  padding: 0.18rem 0.65rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ita th {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--panel-edge);
+  padding-bottom: 0.4rem;
+  padding-top: 0.4rem;
+}
+.ita th span[lang="ja"] { display: block; letter-spacing: 0.1em; }
+
+.ask-col { text-align: right; width: 34%; }
+.price-col { text-align: center; width: 32%; }
+.bid-col { text-align: left; width: 34%; }
+
+.ita td.ask-col { color: var(--ask); text-align: right; }
+.ita td.bid-col { color: var(--bid); text-align: left; }
+.ita td.price-col {
+  text-align: center;
+  color: var(--ink-dim);
+  border-left: 1px solid var(--panel-edge);
+  border-right: 1px solid var(--panel-edge);
+}
+
+.ita tr.has-ask td.ask-col { background: var(--ask-bg); font-weight: 600; }
+.ita tr.has-bid td.bid-col { background: var(--bid-bg); font-weight: 600; }
+
+.ita tr.best-ask td.price-col { color: var(--ask); font-weight: 700; }
+.ita tr.best-bid td.price-col { color: var(--bid); font-weight: 700; }
+
+.ita tr.last td.price-col::after {
+  content: " \25C0";
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.ita tr.limit td.price-col { text-decoration: underline dotted var(--ink-faint); }
+
+.ita tr.edge td {
+  color: var(--ink-faint);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  background: #14181f;
+}
+.ita tr.edge td.ask-col { color: var(--ask); }
+.ita tr.edge td.bid-col { color: var(--bid); }
+
+.ita tr.empty-board td {
+  text-align: center;
+  color: var(--ink-faint);
+  padding: 1.2rem;
+}
+
+/* -- tape ---------------------------------------------------------------- */
+
+.trades th, .trades td {
+  padding: 0.2rem 0.7rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.trades th {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: left;
+  border-bottom: 1px solid var(--panel-edge);
+  padding-top: 0.5rem;
+  padding-bottom: 0.4rem;
+}
+.trades td.num, .trades th.num { text-align: right; }
+.trades td.side { text-align: left; }
+/* Let the final column absorb the slack, so the numeric columns stay grouped
+   instead of being spread across the panel. */
+.trades th:last-child, .trades td:last-child { width: 99%; }
+.trades tr.buy td.side { color: var(--bid); }
+.trades tr.sell td.side { color: var(--ask); }
+.trades tr.auction td.side { color: var(--ink-faint); }
+.trades tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.015); }
+
+/* A new row arrives lit and fades, so movement is visible without watching. */
+@keyframes flash { from { background: rgba(217, 164, 65, 0.35); } to { background: transparent; } }
+.flash { animation: flash 0.7s ease-out; }
+
+/* -- the audit view ------------------------------------------------------ */
+
+.audit-list, .audit-detail {
+  display: flex;
+  flex-direction: column;
+  /* min-height for the scroller below, min-width for the tables inside it: a
+     grid item defaults to min-width:auto, so a wide table would widen the
+     track rather than scroll -- the same reason `.column` sets it. */
+  min-height: 0;
+  min-width: 0;
+  max-height: 100%;
+}
+
+/* Only the tables scroll. The heading and its filters stay put, so the column
+   labels and the controls are still there at the bottom of a long tape. */
+.audit-scroll {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.audit-list .filters {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.audit-list .filters select,
+.audit-list .filters input {
+  font-size: 11px;
+  padding: 0.12rem 0.3rem;
+}
+
+.audit-list .filters .since {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--ink-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.audit-list .filters button {
+  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid var(--panel-edge);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 11px;
+  padding: 0.12rem 0.5rem;
+  cursor: pointer;
+}
+.audit-list .filters button:hover { color: var(--ink); }
+.audit-list .filters button.paused { color: var(--accent); border-color: var(--accent); }
+
+.audit-status {
+  margin: 0;
+  padding: 0.35rem 0.75rem;
+  border-top: 1px solid var(--panel-edge);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+}
+
+/* Both tables lay out on fixed columns. The alternative -- letting the content
+   size them -- makes every row a different shape as traffic arrives, and the
+   ellipsis on a long summary only works against a column of known width. */
+.entries, .dump { table-layout: fixed; }
+
+.entries th, .entries td,
+.dump th, .dump td {
+  padding: 0.15rem 0.6rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entries th:nth-child(1), .entries td:nth-child(1) { width: 5.2rem; }
+.entries th:nth-child(2), .entries td:nth-child(2) { width: 1.8rem; }
+.entries th:nth-child(3), .entries td:nth-child(3) { width: 11rem; }
+.entries th:nth-child(4), .entries td:nth-child(4) { width: 4.5rem; }
+
+.dump th:nth-child(1), .dump td:nth-child(1) { width: 3.4rem; }
+.dump th:nth-child(2), .dump td:nth-child(2) { width: 11rem; }
+.dump th:nth-child(3), .dump td:nth-child(3) { width: 10rem; }
+
+/* The detail pane is where somebody reads a value in full, so it wraps rather
+   than cutting off -- unlike the list, which must stay one line per entry. */
+.dump td.value, .dump td.meaning {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.entries th, .dump th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  text-align: left;
+  border-bottom: 1px solid var(--panel-edge);
+  padding-top: 0.5rem;
+  padding-bottom: 0.4rem;
+}
+.entries td.num, .entries th.num,
+.dump td.num, .dump th.num { text-align: right; }
+
+.entries tbody tr { cursor: pointer; }
+.entries tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
+.entries tbody tr.selected { background: rgba(217, 164, 65, 0.16); }
+
+/* Direction is what the eye runs down, so it is an arrow and it is coloured:
+   inbound is what a client said, outbound is what the venue answered. */
+/* No side padding and no ellipsis: the column is one glyph wide, and an
+   ellipsised arrow is worse than a narrow one. */
+.entries td.dir {
+  text-align: center;
+  padding-left: 0;
+  padding-right: 0;
+  text-overflow: clip;
+}
+.entries tr.inbound td.dir { color: var(--accent); }
+.entries tr.outbound td.dir { color: var(--ink-faint); }
+
+.entries td.time { color: var(--ink-dim); }
+.entries td.type { font-weight: 600; }
+.entries td.sym { color: var(--ink-dim); }
+
+/* The summary takes whatever the fixed columns leave, and clips. */
+.entries td.summary { color: var(--ink-dim); }
+
+/* A control command is the board's own doing, not the wire's. */
+.entries tr.kind-control td.type { color: var(--accent); }
+/* A session-level message names no instrument: Logon, Heartbeat, Reject. */
+.entries tr.session-level td.type { font-weight: 400; color: var(--ink-dim); }
+.entries tr.failed td.summary, .entries tr.failed td.type { color: var(--down); }
+
+.entries tr.gap td {
+  color: var(--ink-faint);
+  font-size: 11px;
+  text-align: center;
+  background: #14181f;
+  padding: 0.4rem;
+}
+
+.dump td.name { color: var(--ink); }
+.dump td.value { color: var(--accent); }
+.dump td.meaning { color: var(--ink-dim); }
+.dump tr.required td.name { font-weight: 600; }
+.dump tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.015); }
+
+/* The reconstructed wire, so the bytes can be read as bytes -- and copied. */
+.wire {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-top: 1px solid var(--panel-edge);
+  font: 11px/1.6 "Consolas", "Courier New", monospace;
+  color: var(--ink-faint);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.error {
+  margin: 0;
+  padding: 0.5rem 0.9rem;
+  background: #3a1d1b;
+  color: #ffb4ac;
+  border-top: 1px solid #5b2a26;
+  font-size: 12px;
+}

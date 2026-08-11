@@ -1,0 +1,20 @@
+# Virtual environments
+venv36/
+venv*/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Runtime state: FIX stores, journals, logs
+var/
+*.log
+
+# Downloaded venue specifications (large binaries, fetched on demand)
+docs/specs/*.pdf
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+Thumbs.db

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ExchangeSim board</title>
+<link rel="stylesheet" href="/static/style.css">
+
+<header class="bar">
+  <span class="brand">ExchangeSim</span>
+
+  <label>Venue
+    <select id="venue"></select>
+  </label>
+  <label>Market
+    <select id="market"></select>
+  </label>
+  <label>Symbol
+    <select id="symbol"></select>
+  </label>
+
+  <span id="instrument-name" class="name"></span>
+
+  <span class="spacer"></span>
+
+  <span id="state" class="badge badge-unknown">&mdash;</span>
+
+  <span class="control" id="state-control" hidden>
+    <select id="state-set" title="move this market to another phase"></select>
+  </span>
+
+  <button type="button" id="view-toggle" class="view-toggle" hidden
+          title="switch between the board and the message audit">audit</button>
+
+  <span id="feed" class="feed feed-down" title="event stream">offline</span>
+</header>
+
+<main id="board-view">
+ <div class="column">
+  <section class="panel ticket" id="ticket" hidden>
+    <h2>Order entry
+      <span class="owner">as <span id="owner-name">WEB</span></span>
+    </h2>
+    <!-- novalidate on purpose: the step below makes the spinner move by a
+         board lot, but an odd lot must still be enterable. The venue is the
+         only thing that decides whether an order is acceptable. -->
+    <form id="order-form" novalidate>
+      <div class="sides">
+        <label class="side side-buy">
+          <input type="radio" name="side" value="BUY" checked> Buy
+        </label>
+        <label class="side side-sell">
+          <input type="radio" name="side" value="SELL"> Sell
+        </label>
+      </div>
+      <div class="fields">
+        <label>Quantity
+          <input id="order-qty" type="number" min="1" step="1" value="100"
+                 title="steps by the board lot; an odd lot may still be typed">
+        </label>
+        <label>Price
+          <input id="order-price" type="text" inputmode="decimal"
+                 placeholder="click a ladder price"
+                 title="up and down step along the ladder, so the price stays
+                        on a valid tick">
+        </label>
+        <label>TIF
+          <select id="order-tif">
+            <option value="DAY">Day</option>
+            <option value="IOC">IOC</option>
+            <option value="FOK">FOK</option>
+          </select>
+        </label>
+      </div>
+      <button type="submit" id="order-submit">Send order</button>
+      <p id="order-result" class="result"></p>
+    </form>
+  </section>
+
+  <section class="panel auction" id="auction" hidden>
+    <h2>Auction <span class="owner" id="auc-kind">&ndash;</span></h2>
+    <div class="quotes">
+      <div class="quote last">
+        <span class="quote-label">Indicative price</span>
+        <span class="quote-price" id="auc-iep">&ndash;</span>
+        <span class="quote-qty" id="auc-iev"></span>
+      </div>
+    </div>
+    <dl class="stats">
+      <div><dt>Imbalance</dt><dd id="auc-imbalance">&ndash;</dd></div>
+      <div><dt>Reference</dt><dd id="auc-reference">&ndash;</dd></div>
+      <div><dt>Band</dt><dd id="auc-band">&ndash;</dd></div>
+      <div class="wide"><dt>Rule</dt><dd id="auc-reason">&ndash;</dd></div>
+    </dl>
+  </section>
+
+  <section class="panel blotter" id="blotter" hidden>
+    <h2>My orders</h2>
+    <table class="orders">
+      <thead>
+        <tr>
+          <th>ClOrdID</th><th>Side</th>
+          <th class="num">Price</th><th class="num">Leaves</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="blotter-rows"></tbody>
+    </table>
+  </section>
+ </div>
+
+ <!-- Level 1 and Level 2 are one column: the same instrument's price seen at
+      two depths, so they share a width and stack. -->
+ <div class="column">
+  <section class="panel level1">
+    <h2>Level 1</h2>
+    <div class="quotes">
+      <div class="quote bid">
+        <span class="quote-label">Bid</span>
+        <span class="quote-price" id="l1-bid">&ndash;</span>
+        <span class="quote-qty" id="l1-bid-qty"></span>
+      </div>
+      <div class="quote last">
+        <span class="quote-label">Last</span>
+        <span class="quote-price" id="l1-last">&ndash;</span>
+        <span class="quote-qty" id="l1-last-qty"></span>
+      </div>
+      <div class="quote ask">
+        <span class="quote-label">Ask</span>
+        <span class="quote-price" id="l1-ask">&ndash;</span>
+        <span class="quote-qty" id="l1-ask-qty"></span>
+      </div>
+    </div>
+
+    <!-- Two columns, paired down the rows: High beside Low, Limit up beside
+         Limit down. Each row is a reading and its counterpart. -->
+    <dl class="stats">
+      <div><dt>Spread</dt><dd id="l1-spread">&ndash;</dd></div>
+      <div><dt>Open</dt><dd id="l1-open">&ndash;</dd></div>
+      <div><dt>High</dt><dd id="l1-high">&ndash;</dd></div>
+      <div><dt>Low</dt><dd id="l1-low">&ndash;</dd></div>
+      <div><dt>VWAP</dt><dd id="l1-vwap">&ndash;</dd></div>
+      <div><dt>Volume</dt><dd id="l1-volume">&ndash;</dd></div>
+      <div><dt>Turnover</dt><dd id="l1-turnover">&ndash;</dd></div>
+      <div><dt>Trades</dt><dd id="l1-trades">&ndash;</dd></div>
+      <div><dt>Limit up</dt><dd id="l1-limit-up">&ndash;</dd></div>
+      <div><dt>Limit down</dt><dd id="l1-limit-down">&ndash;</dd></div>
+      <div><dt>Tick</dt><dd id="l1-tick">&ndash;</dd></div>
+      <div><dt>Lot</dt><dd id="l1-lot">&ndash;</dd></div>
+    </dl>
+  </section>
+
+  <section class="panel board">
+    <h2>Level 2 &mdash; depth board
+      <label class="rows">rows
+        <input id="rows" type="number" min="1" max="50" value="8">
+      </label>
+    </h2>
+    <table class="ita">
+      <thead>
+        <tr>
+          <th class="ask-col">Ask size</th>
+          <th class="price-col">Price</th>
+          <th class="bid-col">Bid size</th>
+        </tr>
+      </thead>
+      <tbody id="ita"></tbody>
+    </table>
+  </section>
+ </div>
+
+  <section class="panel tape">
+    <h2>Trades</h2>
+    <table class="trades">
+      <thead>
+        <tr>
+          <th>Time</th><th class="num">Price</th>
+          <th class="num">Qty</th><th>Aggressor</th>
+        </tr>
+      </thead>
+      <tbody id="tape"></tbody>
+    </table>
+  </section>
+</main>
+
+<!-- A second <main>, not a wrapper inside the first: `main` is itself the grid
+     container, so wrapping its children would break the board's columns. At
+     most one is ever visible. -->
+<main id="audit-view" hidden>
+  <section class="panel audit-list">
+    <h2>Messages
+      <span class="filters">
+        <select id="audit-scope" title="which instrument's traffic to show">
+          <option value="symbol">this ticker</option>
+          <option value="venue">whole venue</option>
+        </select>
+        <select id="audit-kind" title="FIX messages, control commands, or both">
+          <option value="">all traffic</option>
+          <option value="fix">FIX only</option>
+          <option value="control">commands only</option>
+        </select>
+        <select id="audit-direction" title="direction">
+          <option value="">both ways</option>
+          <option value="in">inbound</option>
+          <option value="out">outbound</option>
+        </select>
+        <select id="audit-type" title="message type"></select>
+        <label class="since">from
+          <input id="audit-since" type="text" placeholder="hh:mm:ss" size="8"
+                 title="show only entries at or after this time">
+        </label>
+        <label class="since">to
+          <input id="audit-until" type="text" placeholder="hh:mm:ss" size="8"
+                 title="show only entries at or before this time">
+        </label>
+        <button type="button" id="audit-pause"
+                title="stop the tape so a row stays where it is">pause</button>
+      </span>
+    </h2>
+    <div class="audit-scroll">
+      <table class="entries">
+        <thead>
+          <tr>
+            <th>Time</th><th class="dir"></th><th>Message</th>
+            <th>Symbol</th><th>Detail</th>
+          </tr>
+        </thead>
+        <tbody id="audit-rows"></tbody>
+      </table>
+    </div>
+    <p class="audit-status"><span id="audit-count"></span></p>
+  </section>
+
+  <section class="panel audit-detail">
+    <h2>Fields
+      <span class="owner" id="audit-detail-title">&ndash;</span>
+    </h2>
+    <div class="audit-scroll">
+      <table class="dump">
+        <thead>
+          <tr>
+            <th class="num">Tag</th><th>Field</th>
+            <th>Value</th><th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody id="audit-detail-fields"></tbody>
+      </table>
+      <pre id="audit-detail-raw" class="wire"></pre>
+    </div>
+  </section>
+</main>
+
+<p id="error" class="error" hidden></p>
+
+<script src="/static/app.js"></script>
