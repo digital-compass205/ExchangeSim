@@ -335,6 +335,13 @@ size varies with price**: a client stepping a single remembered tick would
 misalign every row the moment it crossed a threshold in the instrument's tick
 table, and could not tell. `exsim ladder` renders the same thing in a terminal.
 
+The page is dark or light according to `prefers-color-scheme`, which is one
+`@media` block of token values in `static/style.css` because every colour in
+that file is a custom property and none is written inline. Dark is what a
+browser stating no preference gets. The Japanese convention holds in both: the
+`--bid`/`--ask` tokens are red for buying and green for selling, darkened in the
+light palette until they carry on white.
+
 ## The message audit
 
 `exchangesim/audit.py` holds a bounded ring of everything the simulator said and
@@ -361,6 +368,14 @@ field by field, with the wire) and `audit.types` (the filter vocabulary, built
 from the venue's dialect). The live tail passes `after=<seq>` so each poll costs
 only what is new, and reports `truncated` rather than silently skipping entries
 that were overwritten while a reader was paused.
+
+`types` selects message types; `exclude_types` hides them, and hiding wins where
+both name the same type. The exclusion is what drops heartbeats, and it is
+applied by the venue rather than by the reader so that an idle session's traffic
+does not consume the page of entries that was asked for. The tail's cursor
+advances past excluded entries all the same, so a filter that hides recent
+traffic does not make every poll rescan it. The board's **no HB** checkbox and
+`exsim audit -x 0` are the two front ends to it.
 
 ## Scenarios
 

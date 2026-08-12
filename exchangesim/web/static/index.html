@@ -210,11 +210,18 @@
           <input id="audit-until" type="text" placeholder="hh:mm:ss" size="8"
                  title="show only entries at or before this time">
         </label>
+        <!-- On by default: a session at rest is nothing but heartbeats, and
+             they would push the traffic somebody opened the audit for out of
+             the window. -->
+        <label class="toggle"
+               title="hide the Heartbeat traffic of an idle session">
+          <input id="audit-no-heartbeats" type="checkbox" checked> no HB
+        </label>
         <button type="button" id="audit-pause"
                 title="stop the tape so a row stays where it is">pause</button>
       </span>
     </h2>
-    <div class="audit-scroll">
+    <div class="audit-scroll" id="audit-scroll">
       <table class="entries">
         <thead>
           <tr>

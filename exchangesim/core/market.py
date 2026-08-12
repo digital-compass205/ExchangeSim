@@ -111,7 +111,10 @@ class Market(object):
             events = [event for event in events
                       if type(event).__name__ != "OrderAccepted"]
 
-        self._absorb(events, order.symbol)
+        # An amendment changes the book whether or not it produces an event: a
+        # quantity reduction that does not cross produces none at all, and a
+        # subscriber told nothing would keep showing the old size.
+        self._absorb(events, order.symbol, changed=True)
         return kept, events
 
     # -- auctions ----------------------------------------------------------
@@ -201,14 +204,18 @@ class Market(object):
 
     # -- market data -------------------------------------------------------
 
-    def _absorb(self, events, symbol):
-        """Fold engine events into market data and publish the consequences."""
+    def _absorb(self, events, symbol, changed=False):
+        """Fold engine events into market data and publish the consequences.
+
+        ``changed`` forces the book notification for a caller that altered the
+        book without producing an event; events themselves imply it.
+        """
         traded = False
         for event in events:
             if type(event).__name__ == "TradeExecuted":
                 self.data.record_trade(event)
                 traded = True
-        if events:
+        if events or changed:
             self.data.notify_book_change(symbol)
         return traded
 

@@ -105,7 +105,10 @@ and below them during an auction for orders that carry no price. The **rows**
 control sets how many ticks to show each side of the touch.
 
 Colours follow the Japanese convention, which is the reverse of the Western one:
-**buying is red and selling is green**.
+**buying is red and selling is green**. The board itself is dark or light
+according to the machine it is opened on — whatever the operating system or
+browser reports as its preferred colour scheme — and a browser that states no
+preference gets the dark board.
 
 **Trades** on the right is the tape, newest first, and flashes as each trade
 arrives.
@@ -154,10 +157,17 @@ the simulator has said and been told: every FIX message in and out of every
 session, and every command that changed something — so an order you place from
 the board sits on the same tape as the traffic it caused.
 
+The newest entry is at the top, so what just happened is on screen without
+scrolling; older traffic runs down the page. Scroll into the tape and it stays
+where you left it as new rows arrive above.
+
 It follows the instrument you have selected, and always includes the
-session-level messages that usually explain it — Logon, Heartbeat, Reject —
-marked as belonging to no instrument. You can narrow it by direction, by FIX
-versus command, by message type, and by a time window.
+session-level messages that usually explain it — Logon, Reject — marked as
+belonging to no instrument. You can narrow it by direction, by FIX versus
+command, by message type, and by a time window. **no HB** is on by default and
+hides Heartbeat traffic, which is all an idle session produces and would
+otherwise push the traffic you opened the audit for out of the window; clear it
+to see the heartbeats too.
 
 **Click any row** and the right-hand pane shows the message field by field: the
 tag, the field's name, its raw value, and what that value means — `39=1` reads
@@ -230,6 +240,7 @@ python -m exchangesim.cli.exsim monitor 7203         # live, redraws on updates
 python -m exchangesim.cli.exsim trades 7203          # the tape
 python -m exchangesim.cli.exsim orders                # what is working
 python -m exchangesim.cli.exsim audit                 # everything said
+python -m exchangesim.cli.exsim audit -x 0            # without the heartbeats
 python -m exchangesim.cli.exsim audit --seq 128       # one message, field by field
 python -m exchangesim.cli.exsim sessions              # FIX session state
 ```

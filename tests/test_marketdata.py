@@ -248,6 +248,25 @@ class PublishingTest(unittest.TestCase):
 
         self.assertIn("book:NGHT:7203", self.publisher.topics())
 
+    def test_amending_a_quantity_publishes_the_new_top_of_book(self):
+        # The amendment produces no event of its own, so this is the case that
+        # left the depth board showing the old size.
+        self.harness.buy("C1", 500, "2845.5")
+        self.harness.replace("C2", "C1", quantity=200)
+
+        updates = self.publisher.of("book:DAY:7203")
+
+        self.assertEqual(2, len(updates))
+        self.assertEqual(200, updates[-1]["bid_qty"])
+
+    def test_amending_a_price_publishes_the_new_top_of_book(self):
+        self.harness.buy("C1", 100, "2845.5")
+        self.harness.replace("C2", "C1", price="2844.0")
+
+        updates = self.publisher.of("book:DAY:7203")
+
+        self.assertEqual("2844.0", updates[-1]["bid"])
+
     def test_a_rejected_order_publishes_nothing(self):
         self.harness.buy("C1", 150, "2845.5")  # odd lot
 

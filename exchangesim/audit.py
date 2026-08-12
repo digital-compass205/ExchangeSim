@@ -201,7 +201,7 @@ class Audit(object):
 
     def entries(self, after=None, before=None, limit=100, symbol=None,
                 include_session=True, direction=None, kind=None, types=None,
-                since=None, until=None):
+                exclude_types=None, since=None, until=None):
         """A page of the tape, oldest first.
 
         Scans **backwards** and stops as soon as it passes ``after``, so a tail
@@ -217,7 +217,7 @@ class Audit(object):
             if before is not None and entry.seq >= before:
                 continue
             if not _matches(entry, symbol, include_session, direction, kind,
-                            types, since, until):
+                            types, exclude_types, since, until):
                 continue
             if len(collected) >= limit:
                 # There is more between here and the cursor than was asked for.
@@ -274,8 +274,8 @@ class Audit(object):
         }
 
 
-def _matches(entry, symbol, include_session, direction, kind, types, since,
-             until):
+def _matches(entry, symbol, include_session, direction, kind, types,
+             exclude_types, since, until):
     if symbol is not None and entry.symbol != symbol:
         # A Logon or a Heartbeat names no instrument, and is usually what
         # explains the instrument's traffic, so it stays unless asked otherwise.
@@ -286,6 +286,10 @@ def _matches(entry, symbol, include_session, direction, kind, types, since,
     if kind is not None and entry.kind != kind:
         return False
     if types is not None and entry.type not in types:
+        return False
+    # Hiding a type wins over selecting one: the two are set independently, and
+    # a reader who asked for heartbeats to be gone means it.
+    if exclude_types is not None and entry.type in exclude_types:
         return False
     if since is not None and (entry.time is None or entry.time < since):
         return False

@@ -21,6 +21,11 @@
   var TAPE_ROWS = 40;
   var AUDIT_POLL_MS = 1000;
   var AUDIT_ROWS = 400;
+  /* Heartbeat is MsgType 0 in every FIX version either venue speaks; the name
+     is looked up in the venue's dictionary all the same, so a dialect that
+     numbered it otherwise would still be filtered. */
+  var HEARTBEAT_TYPES = ["0"];
+  var HEARTBEAT_NAME = "Heartbeat";
 
   var OWNER = "WEB";
 
@@ -37,6 +42,7 @@
    "state-control", "state-set",
    "view-toggle", "board-view", "audit-view", "audit-rows", "audit-scope",
    "audit-kind", "audit-direction", "audit-type", "audit-since", "audit-until",
+   "audit-no-heartbeats", "audit-scroll",
    "audit-pause", "audit-count", "audit-detail-title", "audit-detail-fields",
    "audit-detail-raw"].forEach(function (id) {
     el[id] = document.getElementById(id);
@@ -63,7 +69,10 @@
     auditPaused: false,
     auditAfter: 0,         // highest sequence number seen; 0 means "load afresh"
     auditSelected: null,
-    auditTypes: null       // fetched once per venue, for the filter menu
+    auditTypes: null,      // fetched once per venue, for the filter menu
+    // The MsgTypes the "no HB" filter hides, taken from the venue's own
+    // dialect rather than assumed, with the FIX value as the fallback.
+    auditHeartbeatTypes: HEARTBEAT_TYPES
   };
 
   /* The board is deep-linkable: ?venue=&market=&symbol= select on load, so a
@@ -553,11 +562,14 @@
 
   // -- the audit view -----------------------------------------------------
   //
-  // A tape rather than a table: rows are appended and never rebuilt, so the row
-  // being read keeps its place and its selection while new traffic arrives
-  // below it. The tail is an incremental poll -- each request asks only for
-  // what is newer than the highest sequence number already shown -- which is
-  // why an audit entry needs no event plumbing of its own.
+  // A tape rather than a table: rows are inserted and never rebuilt, so the row
+  // being read keeps its selection while new traffic arrives. Newest is at the
+  // top, so the entry somebody is waiting for is on screen without scrolling --
+  // which is also why a poll that inserts above the viewport pushes the scroll
+  // position down by as much, leaving what is being read where it was. The tail
+  // is an incremental poll -- each request asks only for what is newer than the
+  // highest sequence number already shown -- which is why an audit entry needs
+  // no event plumbing of its own.
 
   function setView(name) {
     state.view = name;
@@ -579,6 +591,11 @@
     if (state.auditTypes) { return Promise.resolve(); }
     return call("audit.types", {}).then(function (result) {
       state.auditTypes = result;
+      var heartbeats = (result.msg_types || []).filter(function (entry) {
+        return entry.name === HEARTBEAT_NAME;
+      }).map(function (entry) { return entry.type; });
+      state.auditHeartbeatTypes = heartbeats.length ? heartbeats
+                                                    : HEARTBEAT_TYPES;
       el["audit-type"].innerHTML = "";
       el["audit-type"].appendChild(option("", "any message"));
       // Straight from the venue's own dialect, so the menu cannot drift from
@@ -601,6 +618,11 @@
       args.direction = el["audit-direction"].value;
     }
     if (el["audit-type"].value) { args.types = [el["audit-type"].value]; }
+    // Excluded server-side, so a quiet session's heartbeats do not fill the
+    // page's worth of entries the venue was asked for.
+    if (el["audit-no-heartbeats"].checked) {
+      args.exclude_types = state.auditHeartbeatTypes;
+    }
     if (el["audit-since"].value.trim()) {
       args.since = el["audit-since"].value.trim();
     }
@@ -621,14 +643,28 @@
     if (!state.audit || state.view !== "audit") { return Promise.resolve(); }
     var tail = state.auditAfter > 0;
     return call("audit", auditArgs(tail)).then(function (result) {
-      if (result.truncated && tail) { appendGapRow(); }
+      var scroller = el["audit-scroll"];
+      var before = scroller.scrollHeight;
+      // The gap marker goes in first so the entries of this poll end up above
+      // it: it stands for traffic older than they are.
+      if (result.truncated && tail) { prependGapRow(); }
+      // The venue answers oldest first, so inserting each at the top leaves the
+      // batch newest first, which is the order the whole list is in.
       result.entries.forEach(function (entry) {
-        el["audit-rows"].appendChild(auditRow(entry));
+        prependRow(auditRow(entry));
       });
+      // Measured before the trim, which takes rows off the *bottom*: those are
+      // below whatever is being read and move nothing, so counting them here
+      // would leave the compensation short.
+      var added = scroller.scrollHeight - before;
       // Advance past entries a filter excluded as well as those shown, or every
       // poll would rescan the same traffic.
       state.auditAfter = result.last_seq;
       trimAudit();
+      // Rows arriving above the viewport would otherwise carry the row being
+      // read downwards. At the top there is nothing to preserve, so the new
+      // traffic simply appears.
+      if (scroller.scrollTop > 0) { scroller.scrollTop += added; }
       text(el["audit-count"],
            el["audit-rows"].childNodes.length + " shown, " +
            result.capacity + " kept" +
@@ -637,21 +673,28 @@
     }).catch(function (error) { fail(error.message); });
   }
 
+  function prependRow(tr) {
+    var rows = el["audit-rows"];
+    rows.insertBefore(tr, rows.firstChild);
+  }
+
   function trimAudit() {
+    // The oldest row is now the last one, so that is the end trimming takes
+    // from -- dropping the first would throw away the newest traffic.
     var rows = el["audit-rows"];
     while (rows.childNodes.length > AUDIT_ROWS) {
-      rows.removeChild(rows.firstChild);
+      rows.removeChild(rows.lastChild);
     }
   }
 
-  function appendGapRow() {
+  function prependGapRow() {
     var tr = document.createElement("tr");
     tr.className = "gap";
     var td = document.createElement("td");
     td.colSpan = 5;
     td.textContent = "… entries were overwritten before they could be shown";
     tr.appendChild(td);
-    el["audit-rows"].appendChild(tr);
+    prependRow(tr);
   }
 
   function auditRow(entry) {
@@ -803,7 +846,7 @@
   });
 
   ["audit-scope", "audit-kind", "audit-direction", "audit-type",
-   "audit-since", "audit-until"].forEach(function (id) {
+   "audit-since", "audit-until", "audit-no-heartbeats"].forEach(function (id) {
     el[id].addEventListener("change", function () {
       reloadAudit().catch(function (error) { fail(error.message); });
     });

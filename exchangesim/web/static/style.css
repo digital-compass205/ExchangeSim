@@ -1,8 +1,17 @@
-/* A trading board: dark, dense, monospaced numbers.
-   Prices are aligned on a tabular figure width so a ladder column reads as one
-   number per row rather than as ragged text. */
+/* A trading board: dense, monospaced numbers, dark or light as the machine
+   asks. Prices are aligned on a tabular figure width so a ladder column reads
+   as one number per row rather than as ragged text.
+
+   Every colour in this file is one of the tokens below and there are no bare
+   hex values further down, because a second palette is only a second block of
+   token values -- a colour written inline would appear in one theme only.
+   Dark is the default: a browser that states no preference gets the board the
+   simulator has always had, and `prefers-color-scheme: light` swaps the
+   palette wholesale. */
 
 :root {
+  color-scheme: dark;
+
   --bg: #12151b;
   --panel: #191d26;
   --panel-edge: #262c38;
@@ -22,6 +31,63 @@
   --accent: #d9a441;
   --ok: #6fbf73;
   --down: #d2564b;
+
+  /* An input's well, and the ink that reads on the accent as a button fill. */
+  --field: #0e1116;
+  --on-accent: #16181d;
+
+  /* Rows that are not panel: the ladder's edge markers and the audit's gap
+     notice sit below the surface, zebra and hover sit just above it. */
+  --sunken: #14181f;
+  --zebra: rgba(255, 255, 255, 0.015);
+  --row-hover: rgba(255, 255, 255, 0.04);
+
+  --accent-soft: rgba(217, 164, 65, 0.16);
+  --accent-faint: rgba(217, 164, 65, 0.12);
+  --flash: rgba(217, 164, 65, 0.35);
+
+  --error-bg: #3a1d1b;
+  --error-ink: #ffb4ac;
+  --error-edge: #5b2a26;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --bg: #eef0f4;
+    --panel: #ffffff;
+    --panel-edge: #d5dae3;
+    --ink: #1a1e26;
+    --ink-dim: #5a6272;
+    --ink-faint: #868e9d;
+
+    /* The same convention, darkened until it carries on white: buying red,
+       selling green. The washes stay tints of those two. */
+    --ask: #157f3b;
+    --ask-bg: rgba(21, 127, 59, 0.12);
+    --bid: #c0392b;
+    --bid-bg: rgba(192, 57, 43, 0.10);
+
+    --accent: #9a6b12;
+    --ok: #1f7a34;
+    --down: #c0392b;
+
+    --field: #ffffff;
+    --on-accent: #ffffff;
+
+    --sunken: #f1f3f7;
+    --zebra: rgba(0, 0, 0, 0.022);
+    --row-hover: rgba(0, 0, 0, 0.05);
+
+    --accent-soft: rgba(154, 107, 18, 0.16);
+    --accent-faint: rgba(154, 107, 18, 0.11);
+    --flash: rgba(154, 107, 18, 0.28);
+
+    --error-bg: #fdecea;
+    --error-ink: #8c1d13;
+    --error-edge: #f0bfb9;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -75,8 +141,8 @@ h2 {
   color: var(--ink-faint);
 }
 
-select, input[type="number"] {
-  background: #0e1116;
+select, input[type="number"], input[type="text"] {
+  background: var(--field);
   color: var(--ink);
   border: 1px solid var(--panel-edge);
   border-radius: 3px;
@@ -123,7 +189,7 @@ select, input[type="number"] {
   cursor: pointer;
 }
 
-.control button:hover { background: rgba(217, 164, 65, 0.16); }
+.control button:hover { background: var(--accent-soft); }
 
 .view-toggle {
   background: transparent;
@@ -212,7 +278,7 @@ main#audit-view {
   font-size: 12px;
   letter-spacing: 0.04em;
   color: var(--ink-dim);
-  background: #0e1116;
+  background: var(--field);
 }
 .side input { position: absolute; opacity: 0; pointer-events: none; }
 .side-buy { border-radius: 3px 0 0 3px; }
@@ -254,7 +320,7 @@ main#audit-view {
   width: 100%;
   padding: 0.45rem;
   background: var(--accent);
-  color: #16181d;
+  color: var(--on-accent);
   border: 0;
   border-radius: 3px;
   font: inherit;
@@ -276,7 +342,7 @@ main#audit-view {
 
 /* A ladder price is clickable: it fills the ticket rather than being retyped. */
 .ita td.price-col { cursor: pointer; }
-.ita tbody tr:hover td.price-col { background: rgba(217, 164, 65, 0.12); }
+.ita tbody tr:hover td.price-col { background: var(--accent-faint); }
 
 /* -- blotter ------------------------------------------------------------- */
 
@@ -441,7 +507,7 @@ table { width: 100%; border-collapse: collapse; }
   color: var(--ink-faint);
   font-size: 11px;
   letter-spacing: 0.08em;
-  background: #14181f;
+  background: var(--sunken);
 }
 .ita tr.edge td.ask-col { color: var(--ask); }
 .ita tr.edge td.bid-col { color: var(--bid); }
@@ -477,10 +543,10 @@ table { width: 100%; border-collapse: collapse; }
 .trades tr.buy td.side { color: var(--bid); }
 .trades tr.sell td.side { color: var(--ask); }
 .trades tr.auction td.side { color: var(--ink-faint); }
-.trades tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.015); }
+.trades tbody tr:nth-child(even) { background: var(--zebra); }
 
 /* A new row arrives lit and fades, so movement is visible without watching. */
-@keyframes flash { from { background: rgba(217, 164, 65, 0.35); } to { background: transparent; } }
+@keyframes flash { from { background: var(--flash); } to { background: transparent; } }
 .flash { animation: flash 0.7s ease-out; }
 
 /* -- the audit view ------------------------------------------------------ */
@@ -528,6 +594,25 @@ table { width: 100%; border-collapse: collapse; }
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+/* Scoped to the filter bar on purpose: `.view-toggle` in the header is its own
+   class token and does not collide, but a bare `.toggle` here would be one more
+   name in a flat namespace waiting to be reused. */
+.audit-list .filters .toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--ink-faint);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.audit-list .filters .toggle input {
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .audit-list .filters button {
@@ -600,8 +685,8 @@ table { width: 100%; border-collapse: collapse; }
 .dump td.num, .dump th.num { text-align: right; }
 
 .entries tbody tr { cursor: pointer; }
-.entries tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
-.entries tbody tr.selected { background: rgba(217, 164, 65, 0.16); }
+.entries tbody tr:hover { background: var(--row-hover); }
+.entries tbody tr.selected { background: var(--accent-soft); }
 
 /* Direction is what the eye runs down, so it is an arrow and it is coloured:
    inbound is what a client said, outbound is what the venue answered. */
@@ -633,7 +718,7 @@ table { width: 100%; border-collapse: collapse; }
   color: var(--ink-faint);
   font-size: 11px;
   text-align: center;
-  background: #14181f;
+  background: var(--sunken);
   padding: 0.4rem;
 }
 
@@ -641,7 +726,7 @@ table { width: 100%; border-collapse: collapse; }
 .dump td.value { color: var(--accent); }
 .dump td.meaning { color: var(--ink-dim); }
 .dump tr.required td.name { font-weight: 600; }
-.dump tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.015); }
+.dump tbody tr:nth-child(even) { background: var(--zebra); }
 
 /* The reconstructed wire, so the bytes can be read as bytes -- and copied. */
 .wire {
@@ -657,8 +742,8 @@ table { width: 100%; border-collapse: collapse; }
 .error {
   margin: 0;
   padding: 0.5rem 0.9rem;
-  background: #3a1d1b;
-  color: #ffb4ac;
-  border-top: 1px solid #5b2a26;
+  background: var(--error-bg);
+  color: var(--error-ink);
+  border-top: 1px solid var(--error-edge);
   font-size: 12px;
 }

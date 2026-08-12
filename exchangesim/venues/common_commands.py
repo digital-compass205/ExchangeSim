@@ -525,7 +525,8 @@ def register(registry, venue):
             include_session=arg_bool(args, "include_session", default=True),
             direction=arg_choice(args, "direction", ("in", "out"), upper=False),
             kind=arg_choice(args, "kind", (KIND_FIX, KIND_CONTROL), upper=False),
-            types=_audit_types(args),
+            types=_audit_types(args, "types"),
+            exclude_types=_audit_types(args, "exclude_types"),
             since=_audit_time(args, "since", venue.clock),
             until=_audit_time(args, "until", venue.clock))
 
@@ -635,18 +636,23 @@ def _audit_time(args, key, clock):
         "(YYYY-MM-DDTHH:MM:SS)" % key)
 
 
-def _audit_types(args):
-    """The ``types`` filter: MsgTypes for FIX entries, names for commands."""
-    values = args.get("types")
+def _audit_types(args, key):
+    """A type filter: MsgTypes for FIX entries, names for commands.
+
+    Serves both ``types`` (show only these) and ``exclude_types`` (hide these,
+    which is how a tail drops heartbeats).
+    """
+    values = args.get(key)
     if values is None:
         return None
     if isinstance(values, str):
         values = [part for part in values.split(",") if part]
     if not isinstance(values, list):
-        raise CommandError("'types' must be a list of message types")
+        raise CommandError("'%s' must be a list of message types" % key)
     for value in values:
         if not isinstance(value, str) or not value:
-            raise CommandError("each entry of 'types' must be a non-empty string")
+            raise CommandError(
+                "each entry of '%s' must be a non-empty string" % key)
     return frozenset(values) if values else None
 
 

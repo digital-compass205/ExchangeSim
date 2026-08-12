@@ -181,6 +181,22 @@ class FilterTest(unittest.TestCase):
         self.assertEqual(
             [1, 4], self.seqs(types=frozenset((C.LOGON, "order.new"))))
 
+    def test_exclude_types_drops_a_type_and_keeps_the_rest(self):
+        self.assertEqual(
+            [2, 3, 4], self.seqs(exclude_types=frozenset((C.LOGON,))))
+
+    def test_exclude_types_wins_over_a_type_that_was_selected(self):
+        """The two filters are set independently, so the hiding one decides."""
+        self.assertEqual(
+            [4], self.seqs(types=frozenset((C.LOGON, "order.new")),
+                           exclude_types=frozenset((C.LOGON,))))
+
+    def test_excluded_entries_still_advance_the_cursor(self):
+        """Or a tail hiding heartbeats would rescan them on every poll."""
+        page = self.audit.entries(exclude_types=frozenset((C.LOGON,)))
+
+        self.assertEqual(4, page.last_seq)
+
     def test_since_is_inclusive_of_later_entries_only(self):
         self.assertEqual(
             [2, 3, 4], self.seqs(since=datetime(2026, 8, 11, 9, 0, 30)))
@@ -543,6 +559,23 @@ class JapannextAuditTest(unittest.TestCase):
         self.assertEqual("BUY", named["Side"]["label"])
         self.assertEqual("2845.5", named["Price"]["value"])
         self.assertIn("35=D", detail["wire"])
+
+    def test_a_type_can_be_hidden_rather_than_selected(self):
+        """How the board drops the heartbeats of an idle session."""
+        self.client.new_order("A-5", price="2845.5")
+
+        types = set(row["type"] for row in self.entries(exclude_types=["D"]))
+
+        self.assertNotIn("D", types)
+        self.assertIn("8", types)
+
+    def test_a_hidden_type_may_be_given_as_a_comma_separated_string(self):
+        self.client.new_order("A-6", price="2845.5")
+
+        types = set(row["type"] for row in self.entries(exclude_types="D,8"))
+
+        self.assertNotIn("D", types)
+        self.assertNotIn("8", types)
 
     def test_the_filter_vocabulary_comes_from_the_dialect(self):
         types = self.harness.command("audit.types")

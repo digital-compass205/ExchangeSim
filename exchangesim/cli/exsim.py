@@ -174,6 +174,8 @@ def build_parser():
     audit.add_argument("--direction", "-d", choices=("in", "out"))
     audit.add_argument("--type", "-t", dest="msg_type",
                        help="a MsgType or a command name, e.g. D or order.new")
+    audit.add_argument("--exclude", "-x", dest="exclude",
+                       help="hide these MsgTypes or command names, e.g. 0,1")
     audit.add_argument("--since", help="from this time, e.g. 09:30:00")
     audit.add_argument("--until", help="up to this time")
     audit.add_argument("--limit", "-n", type=int, default=50)
@@ -620,6 +622,8 @@ def cmd_audit(client, opts):
     _put(args, "until", opts.until)
     if opts.msg_type:
         args["types"] = [opts.msg_type]
+    if opts.exclude:
+        args["exclude_types"] = [part for part in opts.exclude.split(",") if part]
 
     result = client.call("audit", args)
     return _emit(result, opts, lambda r: render_table(
