@@ -97,16 +97,17 @@ http://127.0.0.1:9200/?symbol=7203&live=0     # a static snapshot, no updates
 
 ### The board
 
-**Level 1** is the top of book: best bid, last trade and best offer with their
-sizes, then the day's statistics — spread, open, high, low, VWAP, volume,
-turnover, trade count, the price limits, and the instrument's tick size and
-board lot.
+**Level 1** heads the right-hand column: best bid, last trade and best offer
+with their sizes, then the day's statistics — spread, open, high, low, VWAP,
+volume, turnover, trade count, the price limits, and the instrument's tick size
+and board lot.
 
-**Level 2** below it is a Japanese-style depth board: one row per tick, ask size
-on the left, price down the centre, bid size on the right. `OVER` and `UNDER`
-carry everything resting outside the window, and a `MARKET` row appears above
-and below them during an auction for orders that carry no price. The **rows**
-control sets how many ticks to show each side of the touch.
+**Level 2** has the middle column to itself, a Japanese-style depth board: one
+row per tick, ask size on the left, price down the centre, bid size on the
+right. `OVER` and `UNDER` carry everything resting outside the window, and a
+`MARKET` row appears above and below them during an auction for orders that
+carry no price. The **rows** control sets how many ticks to show each side of
+the touch.
 
 Colours follow the Japanese convention, which is the reverse of the Western one:
 **buying is red and selling is green**. The board itself is dark or light
@@ -114,8 +115,8 @@ according to the machine it is opened on — whatever the operating system or
 browser reports as its preferred colour scheme — and a browser that states no
 preference gets the dark board.
 
-**Trades** on the right is the tape, newest first, and flashes as each trade
-arrives.
+**Trades** sits beneath Level 1 on the right — the price as it stands, above the
+prints that put it there. Newest first, and each new trade arrives lit.
 
 ### Placing an order
 

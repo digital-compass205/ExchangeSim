@@ -106,8 +106,30 @@
   </section>
  </div>
 
- <!-- Level 1 and Level 2 are one column: the same instrument's price seen at
-      two depths, so they share a width and stack. -->
+ <!-- The depth board has the middle column to itself: the ladder is the widest
+      thing on the page and the one people watch. -->
+ <div class="column">
+  <section class="panel board">
+    <h2>Level 2 &mdash; depth board
+      <label class="rows">rows
+        <input id="rows" type="number" min="1" max="50" value="8">
+      </label>
+    </h2>
+    <table class="ita">
+      <thead>
+        <tr>
+          <th class="ask-col">Ask size</th>
+          <th class="price-col">Price</th>
+          <th class="bid-col">Bid size</th>
+        </tr>
+      </thead>
+      <tbody id="ita"></tbody>
+    </table>
+  </section>
+ </div>
+
+ <!-- Level 1 sits on top of the tape, one column on the right: the price as it
+      stands, above the prints that put it there. -->
  <div class="column">
   <section class="panel level1">
     <h2>Level 1</h2>
@@ -147,25 +169,6 @@
     </dl>
   </section>
 
-  <section class="panel board">
-    <h2>Level 2 &mdash; depth board
-      <label class="rows">rows
-        <input id="rows" type="number" min="1" max="50" value="8">
-      </label>
-    </h2>
-    <table class="ita">
-      <thead>
-        <tr>
-          <th class="ask-col">Ask size</th>
-          <th class="price-col">Price</th>
-          <th class="bid-col">Bid size</th>
-        </tr>
-      </thead>
-      <tbody id="ita"></tbody>
-    </table>
-  </section>
- </div>
-
   <section class="panel tape">
     <h2>Trades</h2>
     <table class="trades">
@@ -178,6 +181,7 @@
       <tbody id="tape"></tbody>
     </table>
   </section>
+ </div>
 </main>
 
 <!-- A second <main>, not a wrapper inside the first: `main` is itself the grid

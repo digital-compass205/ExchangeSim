@@ -229,7 +229,7 @@ select, input[type="number"], input[type="text"] {
 
 main {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.1fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(260px, 1fr) minmax(320px, 1.1fr) minmax(300px, 1fr);
   gap: 0.75rem;
   padding: 0.75rem;
   align-items: start;
@@ -240,8 +240,12 @@ main {
    hidden -- which is exactly what happened the first time. */
 main[hidden] { display: none; }
 
-/* Level 1 shares the depth board's column and sits directly on top of it: one
-   instrument's price at two depths, so they read as one stack of one width. */
+/* Three columns: what you send, what the book looks like, and what it did.
+   Level 1 heads the right-hand column with the tape beneath it -- the price as
+   it stands above the prints that put it there -- which leaves the ladder the
+   middle column to itself. The right-hand minimum is set by Level 1 rather than
+   by the tape: its three quote cells sit side by side and are the first thing
+   to become unreadable when the column narrows. */
 
 /* The audit is its own <main>: a list of everything said, and the fields of
    whichever entry is selected, so one can be read while the other scrolls. */
