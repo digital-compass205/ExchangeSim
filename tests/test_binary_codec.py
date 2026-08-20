@@ -21,6 +21,12 @@ from exchangesim.venues.hkex import binary as binary_layouts
 from exchangesim.venues.hkex import dictionary as D
 
 
+#: Stands in for the RSA-encrypted credential a Logon carries. Only its shape
+#: matters here -- the field is Alphanumeric Fixed Length (450), null-padded --
+#: so it is written out rather than borrowed from a real client's capture.
+PASSWORD = "c2ltdWxhdG9yLXBhc3N3b3Jk"
+
+
 def build_codec(comp_id="HKEXSIM"):
     dictionary = D.build_binary()
     return BinaryCodec(binary_layouts.build(dictionary), comp_id), dictionary
@@ -177,7 +183,7 @@ class SessionMessageTest(unittest.TestCase):
     def test_logon_carries_the_fields_a_client_sends(self):
         logon = Message.create(C.LOGON)
         logon.set(C.MSG_SEQ_NUM, 388)
-        logon.set(C.ENCRYPTED_PASSWORD, "OG13zxchmYeV")
+        logon.set(C.ENCRYPTED_PASSWORD, PASSWORD)
         logon.set(C.NEXT_EXPECTED_MSG_SEQ_NUM, 1)
         logon.set(C.TEST_MESSAGE_INDICATOR, "N")
 
@@ -185,7 +191,7 @@ class SessionMessageTest(unittest.TestCase):
         self.assertEqual(raw[22], 0xA4)      # Password, NextExpected, TestMsg
         self.assertEqual(decoded.msg_type, C.LOGON)
         self.assertEqual(decoded.seq_num, 388)
-        self.assertEqual(decoded.get(C.ENCRYPTED_PASSWORD), "OG13zxchmYeV")
+        self.assertEqual(decoded.get(C.ENCRYPTED_PASSWORD), PASSWORD)
         self.assertEqual(decoded.get(C.NEXT_EXPECTED_MSG_SEQ_NUM), "1")
         self.assertEqual(decoded.get(C.TEST_MESSAGE_INDICATOR), "N")
         self.assertIsNone(self.dictionary.validate(decoded))
