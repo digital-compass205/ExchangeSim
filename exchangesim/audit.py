@@ -50,11 +50,12 @@ class AuditEntry(object):
     """One thing that happened, in the order it happened."""
 
     __slots__ = ("seq", "time", "kind", "direction", "session", "symbol",
-                 "type", "type_name", "seq_num", "ok", "raw", "error", "detail")
+                 "type", "type_name", "seq_num", "ok", "raw", "error",
+                 "detail", "protocol")
 
     def __init__(self, seq, time, kind, direction, session=None, symbol=None,
                  type_=None, type_name=None, seq_num=None, ok=True, raw=None,
-                 error=None, detail=None):
+                 error=None, detail=None, protocol=None):
         self.seq = seq
         self.time = time
         self.kind = kind
@@ -72,6 +73,10 @@ class AuditEntry(object):
         self.error = error
         #: The lifted tags of a message, or a command's arguments and reply.
         self.detail = detail
+        #: Which wire encoding produced ``raw``, so that whoever renders it
+        #: later reaches for the same codec that recorded it. None for a
+        #: control command, which has no wire at all.
+        self.protocol = protocol
 
     def complete(self, ok, error=None, result=None):
         """Fill in how a control command turned out.
@@ -99,6 +104,7 @@ class AuditEntry(object):
             "seq_num": self.seq_num,
             "ok": self.ok,
             "error": self.error,
+            "protocol": self.protocol,
         }
 
 
@@ -139,7 +145,7 @@ class Audit(object):
 
     def record_message(self, direction, session, message=None, raw=None,
                        type_name=None, extracted=None, symbol=None,
-                       error=None):
+                       error=None, protocol=None):
         """Record one FIX message, in either direction.
 
         ``message`` is None when the bytes could not be parsed -- a framing or
@@ -159,7 +165,8 @@ class Audit(object):
             ok=error is None,
             raw=raw,
             error=error,
-            detail=extracted)
+            detail=extracted,
+            protocol=protocol)
         self._append(entry)
         return entry
 

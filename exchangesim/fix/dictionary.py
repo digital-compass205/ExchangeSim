@@ -181,18 +181,30 @@ def _check_numeric(field, value):
 
 
 def _check_timestamp(field, value):
-    """UTCTimestamp: ``YYYYMMDD-HH:MM:SS`` with optional ``.sss``."""
-    if len(value) not in (17, 21) or value[8] != "-":
-        return _format_failure(field, "YYYYMMDD-HH:MM:SS[.sss]")
+    """UTCTimestamp: ``YYYYMMDD-HH:MM:SS`` with an optional fraction.
+
+    How much fraction is a property of the dialect, not of FIX: Japannext
+    writes milliseconds and HKEX OCG-C writes microseconds, and a client that
+    sends what its own specification documents must not be rejected. The field
+    says how many places it allows through ``max_decimals``; anything from one
+    place up to that is accepted, since a client is free to send a shorter
+    fraction than the maximum.
+    """
+    places = field.max_decimals or 3
+    expected = "YYYYMMDD-HH:MM:SS[.%s]" % ("s" * places)
+    if len(value) < 17 or value[8] != "-":
+        return _format_failure(field, expected)
     date, _, clock = value.partition("-")
-    if not date.isdigit():
-        return _format_failure(field, "YYYYMMDD-HH:MM:SS[.sss]")
-    seconds, _, millis = clock.partition(".")
+    if not date.isdigit() or len(date) != 8:
+        return _format_failure(field, expected)
+    seconds, separator, fraction = clock.partition(".")
     parts = seconds.split(":")
     if len(parts) != 3 or not all(part.isdigit() and len(part) == 2 for part in parts):
-        return _format_failure(field, "YYYYMMDD-HH:MM:SS[.sss]")
-    if millis and (not millis.isdigit() or len(millis) != 3):
-        return _format_failure(field, "YYYYMMDD-HH:MM:SS[.sss]")
+        return _format_failure(field, expected)
+    if separator and (not fraction.isdigit() or not 1 <= len(fraction) <= places):
+        return _format_failure(field, expected)
+    if not separator and len(value) != 17:
+        return _format_failure(field, expected)
     return None
 
 

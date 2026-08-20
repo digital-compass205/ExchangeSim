@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An exchange simulator that stands in for a venue's test environment in CI/CD. Two venues: Japannext PTS equities over FIX 4.2, and the HKEX securities market over OCG-C (FIX 5.0 SP2 on a FIXT.1.1 session), the latter covering board-lot continuous trading and the POS/CAS call auctions. See `README.md` for the user guide, `DETAILED_DOC.md` for architecture, venue rules and known gaps, and `docs/specs/README.md` for what each specification required.
+An exchange simulator that stands in for a venue's test environment in CI/CD. Two venues: Japannext PTS equities over FIX 4.2, and the HKEX securities market over OCG-C, covering board-lot continuous trading and the POS/CAS call auctions. HKEX publishes OCG-C in **two encodings of one protocol** -- FIX 5.0 SP2 on a FIXT.1.1 session, and a fixed-width binary format -- and both are served, on one set of books. See `README.md` for the user guide, `DETAILED_DOC.md` for architecture, venue rules and known gaps, and `docs/specs/README.md` for what each specification required.
 
 **Hard constraints, both deliberate:**
 
@@ -24,7 +24,7 @@ $PY -m unittest tests.test_matching.SelfTradePreventionTest.test_cancel_newest_c
 
 $PY -m exchangesim.runner.main --config config/japannext.json --check   # validate config only
 $PY -m exchangesim.runner.main --config config/japannext.json           # run a venue
-$PY -m exchangesim.runner.main --config config/hkex.json                # FIX 9011, control 9102
+$PY -m exchangesim.runner.main --config config/hkex.json                # FIX 9011, binary 9012, control 9102
 
 $PY -m exchangesim.web.main --config config/web.json    # web board on :9200 (its own process)
 
@@ -74,8 +74,25 @@ Reach for the Japannext module as a template only after checking these, because 
 | Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` |
 | Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` |
 | Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message |
+| Encodings | tag=value FIX | tag=value FIX **and** binary, one port each, one session table |
 
 Repeating groups needed **no codec change**: `Message` keeps fields ordered and offers `get_all`/`append`, so a group is read positionally. What that cannot do is check the count, so `hkex/handlers.py:_check_count` does, rejecting a mismatch with `SessionRejectReason=16`. Any new group needs the same.
+
+### The second encoding
+
+HKEX publishes OCG-C twice, as tag=value FIX and as a fixed-width little-endian binary format, and entitles a Comp ID to one of them. The binary one is a **codec, not a second gateway**: `binary/` turns a frame into the same `fix.Message` everything above it speaks, so the session layer, dictionary validation, handlers, engine, audit, CLI and board are shared and neither encoding knows about the other.
+
+The seam is four methods -- `framer`, `extract`/`decode`, `encode`, `is_admin` -- named by `fix/codec.py:FixCodec` and implemented again by `binary/codec.py:BinaryCodec`. `Session` and `Acceptor` hold one; nothing else in `fix/` touches the wire format. **If you find yourself branching on `session.wire` outside a gateway, the branch is in the wrong place** -- the one legitimate use is `hkex/handlers.py:_for_wire`, and the reason is below.
+
+Five things here are load-bearing.
+
+- **The one Comp ID on the wire is the client's, in both directions** (section 7.2). The codec supplies the venue's own identity as the missing half, so `_check_comp_ids` is unchanged; `BinaryCodec(..., client=True)` mirrors that for a client, which is what the test harness and the scenario runner use. A client that puts the *venue's* Comp ID in the header resolves to no session at all.
+- **A binary message type without a layout decodes to MsgType `B<n>`**, which no dialect defines, so the dictionary refuses it as an invalid message type -- a clean Reject rather than a dropped session -- and `binary_type()` parses the number back so the Reject can name it. An unrecognised *value* likewise passes through as text for the dictionary to refuse. What is fatal is an unknown **bit position**: the field's width is unknown, so nothing after it can be parsed.
+- **`dictionary.build_binary()` is a separate transcription, not a flag.** The two published tables disagree about required fields -- a Cancel Request has no OrderQty, `SecurityExchange` is optional, Logon has no EncryptMethod or HeartBtInt -- and each session is validated against the document its client was written from.
+- **There is no OrderCancelReject in the binary encoding.** A refused cancel or amend is an Execution Report with `ExecType` `X`/`Y` carrying the order's identity and running totals, which 35=9 has no fields for. `_for_wire` rebuilds it in the gateway because those fields come from the *order*; a codec that reached for one would be a gateway.
+- **Bit positions are per message type.** `Price` is bit 9 of a New Order, 11 of an Amend and 12 of an Execution Report. Every Execution Report variant in section 7.6.7 shares one assignment, though, so there is one layout and which fields it fills stays in the handlers.
+
+`Audit` entries carry the `protocol` that recorded them and are read back with `venue.wire_codec(...)`; a binary entry renders as a hex dump with credentials struck out, so the bytes line up with a client's own log.
 
 ### Auctions
 
@@ -144,6 +161,8 @@ These caused real bugs and are easy to reintroduce.
 
 **`OrigClOrdID` is the order's *current* ClOrdID, not its original one** (the specification is explicit). `OrderRegistry.resolve` enforces this while still remembering every identifier ever used, so a genuine duplicate is still rejectable.
 
+**Timestamp precision is a property of the dialect, not of FIX.** Japannext writes milliseconds and OCG-C microseconds, so `FieldDef.max_decimals` carries it and `build_session_dictionary(timestamp_decimals=...)` passes it down. The shared checker accepted only `.sss` until a real HKEX client sent what its own specification documents and was rejected with `SessionRejectReason=6`.
+
 **Markets are addressed by SubID, not by port — at Japannext.** `DAY`, `NGHT`, `DAYX`, `DAYU` are four separate books and trading states reached over one connection via `TargetSubID(57)`, falling back to the session's `default_sub_id`. HKEX is the counter-example and the reason "market" must stay a core concept rather than a header tag: there, the security's segment picks the book and no message names it. A venue that narrows which markets carry an instrument overrides `Venue.books_for`, so `instrument.add` places it where the wire protocol would.
 
 **The clock is injected, but FIX `SendingTime(52)` must always be real wall-clock** or conformant clients session-reject with `SessionRejectReason=10`. `FixedClock` exists for tests; market state transitions are command-driven, so no accelerated clock is needed at runtime.
@@ -187,7 +206,7 @@ Single-threaded `selectors` reactor (`core/reactor.py`), chosen over `asyncio` f
 | `tests/coresupport.py` | book/matching/engine, no protocol |
 | `tests/fixsupport.py` | FIX session layer against a fake transport |
 | `tests/jnxsupport.py` | full Japannext venue, real dictionary and engine, fake sockets |
-| `tests/hkexsupport.py` | the same for HKEX; its client helpers build the repeating groups |
+| `tests/hkexsupport.py` | the same for HKEX; its client helpers build the repeating groups, and `binary_venue_config()` puts a third broker on the binary encoding |
 | `tests/support.py` | reactor and control plane over real loopback sockets |
 
 `scenarios/*.json` run against a **live** daemon over real sockets and are the artifact CI calls. They share one process per venue, so give each scenario distinct ClOrdIDs (the registry remembers them for the process lifetime) and bracket it with `orders.cancel_all`. A scenario names its own `fix_port`, `control_port`, `begin_string` and `logon_fields`, so `make smoke` starts every venue in `VENUES` and one runner invocation covers them all.

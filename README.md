@@ -8,10 +8,14 @@ read back every message that crossed the wire.
 
 Two venues ship today:
 
-| Venue | Protocol | FIX port | Control port |
+| Venue | Protocol | Port | Control port |
 |---|---|---|---|
 | **Japannext PTS** equities | FIX 4.2 | 9001 | 9101 |
 | **HKEX securities market** (SEHK) | OCG-C — FIX 5.0 SP2 over FIXT.1.1 | 9011 | 9102 |
+| | OCG-C — the same protocol, binary encoding | 9012 | |
+
+HKEX publishes OCG-C in two interchangeable encodings and this serves both, on
+one set of books: a binary client and a FIX client trade with each other.
 
 A real venue's UAT is open only during published windows, needs booked slots and
 credentials, is shared with everyone else, and cannot be told to halt a stock
@@ -172,7 +176,9 @@ to see the heartbeats too.
 **Click any row** and the right-hand pane shows the message field by field: the
 tag, the field's name, its raw value, and what that value means — `39=1` reads
 `PARTIALLY_FILLED`, `54=1` reads `BUY` — with the message exactly as it was on
-the wire underneath.
+the wire underneath. A binary message is shown as a hex dump, offsets and all,
+so it can be read against your own gateway's log; either way a password is
+struck out rather than displayed.
 
 ![The audit view: the message tape on the left, the selected message's fields on the right](docs/images/audit.png)
 
@@ -198,7 +204,8 @@ The shipped configs define two sessions per venue, ready to use:
 | Venue | Host:port | SenderCompID (venue) | TargetCompID (you) |
 |---|---|---|---|
 | Japannext | `127.0.0.1:9001` | `JNXSIM` | `CLIENT1`, `CLIENT2` |
-| HKEX | `127.0.0.1:9011` | `HKEXSIM` | `BROKER1`, `BROKER2` |
+| HKEX, FIX | `127.0.0.1:9011` | `HKEXSIM` | `BROKER1`, `BROKER2` |
+| HKEX, binary | `127.0.0.1:9012` | `HKEXSIM` | `BROKER3` |
 
 **Japannext** is FIX 4.2 (`BeginString=FIX.4.2`). Logon needs
 `EncryptMethod(98)=0` and `HeartBtInt(108)`; `ResetSeqNumFlag(141)=Y` is
@@ -217,7 +224,21 @@ message names a market — the security's segment decides which book it reaches.
 Every business message carries a `<Parties>` group and a
 `<DisclosureInstructionGrp>`.
 
-`CLIENT1` and `BROKER1` have **Cancel on Disconnect** switched on, so their
+**The HKEX binary encoding** is the same protocol on a different wire, so
+everything above about instruments, segments and groups still holds — what
+changes is how the bytes are laid out. Point a binary client at **9012** with a
+Comp ID registered for it (`BROKER3` as shipped), and note that the frame
+carries **one Comp ID, your own**: there is no Sender/Target pair, so a client
+that puts the venue's `HKEXSIM` there will not be recognised. Logon needs
+`Password` and `Next Expected Message Sequence` and has no EncryptMethod or
+HeartBtInt to send. A refused cancel or amend comes back as an Execution Report
+with `Exec Type` `X` or `Y`, this encoding having no OrderCancelReject.
+
+A session belongs to one encoding: add `"protocol": "binary"` to its entry in
+the config's `fix.sessions`, and set the listener's port in the `binary` block.
+The binary port opens only when at least one session asks for it.
+
+`CLIENT1`, `BROKER1` and `BROKER3` have **Cancel on Disconnect** switched on, so their
 resting orders are pulled when the socket closes; `CLIENT2` and `BROKER2` do
 not. That catches people out — if orders you placed keep vanishing, that is why.
 

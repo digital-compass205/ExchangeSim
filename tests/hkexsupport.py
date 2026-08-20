@@ -17,8 +17,11 @@ from exchangesim.core.clock import FixedClock
 from exchangesim.core.config import Config
 from exchangesim.core.reactor import Reactor
 from exchangesim.fix import constants as C
-from exchangesim.fix.message import Framer, Message, decode, encode
+from exchangesim.fix.codec import FixCodec
+from exchangesim.fix.message import Message
+from exchangesim.venues.hkex import binary as binary_layouts
 from exchangesim.venues.hkex import dictionary as D
+from exchangesim.binary.codec import BinaryCodec
 from exchangesim.venues.hkex.venue import HkexVenue
 
 from .fixsupport import FakeTransport
@@ -26,10 +29,14 @@ from .fixsupport import FakeTransport
 SERVER = "HKEXSIM"
 BROKER1 = "BROKER1"
 BROKER2 = "BROKER2"
+#: Registered for the binary encoding of the same protocol; see
+#: :func:`binary_venue_config`.
+BROKER3 = "BROKER3"
 
 #: Broker Numbers, as PartyID(448) with PartyRole(452)=1.
 BROKER1_ID = "1001"
 BROKER2_ID = "1002"
+BROKER3_ID = "1003"
 
 #: A Main Board security from the shipped universe: base 395.800, lot 100,
 #: spread 0.200 above 200, so the band is 24 x 0.2 = 4.8 -> 391.000 to 400.600.
@@ -73,12 +80,16 @@ def venue_config(markets=None, sessions=None, **extra):
 class ClientSession(object):
     """One connected broker: sends FIX in, collects FIX out."""
 
-    def __init__(self, session, clock, broker_id=BROKER1_ID):
+    def __init__(self, session, clock, broker_id=BROKER1_ID, codec=None):
         self.session = session
         self.clock = clock
         self.broker_id = broker_id
+        #: The client half of the session's encoding. Given one, this same
+        #: harness drives a binary client: only the bytes on the fake wire
+        #: change, and every message helper below is shared.
+        self.codec = codec or FixCodec(BEGIN_STRING)
         self.transport = FakeTransport()
-        self._framer = Framer()
+        self._framer = self.codec.framer()
         self.seq = 1
         #: What we next expect from the venue, for NextExpectedMsgSeqNum(789).
         self.next_expected = 1
@@ -88,11 +99,14 @@ class ClientSession(object):
 
     def logon(self, next_expected=None, password="0Ru2xMk=", **fields):
         message = Message.create(C.LOGON)
-        message.set(C.ENCRYPT_METHOD, "0")
-        message.set(C.HEART_BT_INT, 20)
+        if self.codec.name == "fix":
+            # The binary Logon has neither field: see SessionConfig.
+            message.set(C.ENCRYPT_METHOD, "0")
+            message.set(C.HEART_BT_INT, 20)
         message.set(C.NEXT_EXPECTED_MSG_SEQ_NUM,
                     self.next_expected if next_expected is None else next_expected)
-        message.set(C.DEFAULT_APPL_VER_ID, C.ApplVerID.FIX50SP2)
+        if self.codec.name == "fix":
+            message.set(C.DEFAULT_APPL_VER_ID, C.ApplVerID.FIX50SP2)
         if password is not None:
             message.set(C.ENCRYPTED_PASSWORD_METHOD, 101)
             message.set(C.ENCRYPTED_PASSWORD, password)
@@ -112,7 +126,7 @@ class ClientSession(object):
         message.set(C.SENDER_COMP_ID, self.session.target_comp_id)
         message.set(C.TARGET_COMP_ID, self.session.sender_comp_id)
         message.set(C.SENDING_TIME, self.clock.timestamp())
-        self.session.on_data(encode(message, BEGIN_STRING))
+        self.session.on_data(self.codec.encode(message))
         return message
 
     # -- repeating groups --------------------------------------------------
@@ -209,7 +223,7 @@ class ClientSession(object):
 
     def received(self):
         """Decode and clear everything the venue has sent to this client."""
-        messages = [decode(raw)
+        messages = [self.codec.decode(raw)
                     for raw in self._framer.feed(self.transport.take())]
         for message in messages:
             if message.seq_num is not None:
@@ -224,6 +238,26 @@ class ClientSession(object):
     def drain(self):
         self.received()
         return self
+
+
+def binary_venue_config(**extra):
+    """A venue whose third session speaks the binary encoding.
+
+    The first two stay on FIX, so one harness exercises both encodings against
+    one set of books -- which is the arrangement the config file ships and the
+    one worth having tests over.
+    """
+    return venue_config(
+        sessions=[
+            {"target_comp_id": BROKER1, "protocol": "fix",
+             "markets": ["MAIN", "GEM"], "cancel_on_disconnect": True},
+            {"target_comp_id": BROKER2, "protocol": "fix",
+             "markets": ["MAIN", "GEM"], "cancel_on_disconnect": False},
+            {"target_comp_id": BROKER3, "protocol": "binary",
+             "markets": ["MAIN", "GEM"], "cancel_on_disconnect": True},
+        ],
+        binary={"host": "127.0.0.1", "port": 0},
+        **extra)
 
 
 class VenueHarness(object):
@@ -252,8 +286,14 @@ class VenueHarness(object):
         if existing is not None:
             return existing
         session = self.venue.manager.get(SERVER, target_comp_id)
-        broker_id = BROKER1_ID if target_comp_id == BROKER1 else BROKER2_ID
-        client = ClientSession(session, self.clock, broker_id)
+        broker_id = _BROKER_IDS.get(target_comp_id, BROKER1_ID)
+        codec = None
+        if session.wire == "binary":
+            # The client half of the venue's own codec: same layouts, mirrored
+            # Comp ID handling, because the wire carries only the client's.
+            codec = BinaryCodec(binary_layouts.build(session.dictionary),
+                                SERVER, client=True)
+        client = ClientSession(session, self.clock, broker_id, codec=codec)
         self.clients[target_comp_id] = client
         if logon:
             client.logon().drain()
@@ -293,6 +333,10 @@ class _StubServer(object):
     @property
     def requires_auth(self):
         return False
+
+
+#: Which Broker Number each configured session submits under.
+_BROKER_IDS = {BROKER1: BROKER1_ID, BROKER2: BROKER2_ID, BROKER3: BROKER3_ID}
 
 
 def tags(message, *wanted):

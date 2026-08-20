@@ -54,7 +54,8 @@ import time
 from ..cli.client import CommandFailed, ControlClient, ControlClientError
 from ..core.clock import RealClock
 from ..fix import constants as C
-from ..fix.message import Framer, Message, decode, encode
+from ..fix.codec import FixCodec
+from ..fix.message import Message
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -75,12 +76,29 @@ class StepFailure(Exception):
     """A step did not do what the scenario said it should."""
 
 
+def _client_codec(protocol, begin_string, server_comp_id):
+    """The client half of one of a venue's encodings.
+
+    The binary encoding is HKEX's, and its layouts live with that venue, so the
+    import is deferred: a run that scripts nothing but FIX never touches it.
+    """
+    if protocol == "fix":
+        return FixCodec(begin_string)
+    if protocol == "binary":
+        from ..binary.codec import BinaryCodec
+        from ..venues.hkex import binary as layouts
+        from ..venues.hkex import dictionary as hkex_dictionary
+        return BinaryCodec(layouts.build(hkex_dictionary.build_binary()),
+                           server_comp_id, client=True)
+    raise ScenarioError("unknown protocol '%s'" % protocol)
+
+
 class Session(object):
     """One scripted FIX client."""
 
     def __init__(self, name, comp_id, host, port, server_comp_id, sub_id=None,
                  timeout=5.0, begin_string="FIX.4.2", logon_fields=None,
-                 logon_reset_flag=True):
+                 logon_reset_flag=True, protocol="fix"):
         self.name = name
         self.comp_id = comp_id
         self.server_comp_id = server_comp_id
@@ -95,10 +113,13 @@ class Session(object):
         #: HKEX refuses a client-initiated ResetSeqNumFlag, so a scenario there
         #: restarts its own numbering without asking the venue to.
         self.logon_reset_flag = logon_reset_flag
+        #: Which encoding of the venue's protocol this session speaks.
+        self.protocol = protocol
+        self.codec = _client_codec(protocol, begin_string, server_comp_id)
         self.clock = RealClock()
         self.sock = None
         self.seq = 1
-        self._framer = Framer()
+        self._framer = self.codec.framer()
         self._inbox = []
 
     # -- connection --------------------------------------------------------
@@ -151,7 +172,7 @@ class Session(object):
         if message.msg_type in ("D", "F", "G", "q") and not message.has(60):
             message.set(60, self.clock.timestamp())
 
-        self.sock.sendall(encode(message, self.begin_string))
+        self.sock.sendall(self.codec.encode(message))
         return message
 
     def logon(self, reset=True, heartbeat=30):
@@ -182,7 +203,8 @@ class Session(object):
             return
         if not chunk:
             return
-        self._inbox.extend(decode(raw) for raw in self._framer.feed(chunk))
+        self._inbox.extend(self.codec.decode(raw)
+                           for raw in self._framer.feed(chunk))
 
     def match(self, fields):
         """Remove and return the first buffered message matching ``fields``."""
@@ -302,7 +324,8 @@ class Runner(object):
                 spec.get("sub_id"),
                 begin_string=data.get("begin_string", "FIX.4.2"),
                 logon_fields=spec.get("logon_fields", data.get("logon_fields")),
-                logon_reset_flag=data.get("logon_reset_flag", True))
+                logon_reset_flag=data.get("logon_reset_flag", True),
+                protocol=spec.get("protocol", data.get("protocol", "fix")))
         return sessions
 
     # -- step execution ----------------------------------------------------

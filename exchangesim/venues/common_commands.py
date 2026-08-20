@@ -530,11 +530,11 @@ def register(registry, venue):
             since=_audit_time(args, "since", venue.clock),
             until=_audit_time(args, "until", venue.clock))
 
-        dictionary = getattr(venue, "dictionary", None)
         entries = []
         for entry in page.entries:
             row = entry.describe()
-            row["summary"] = _audit_summary(entry, dictionary)
+            row["summary"] = _audit_summary(
+                entry, venue.dictionary_for(entry.protocol))
             entries.append(row)
 
         return {"entries": entries,
@@ -555,7 +555,7 @@ def register(registry, venue):
                 "entry %d is not in the audit; it has been overwritten" % seq,
                 E_NOT_FOUND)
 
-        dictionary = getattr(venue, "dictionary", None)
+        dictionary = venue.dictionary_for(entry.protocol)
         row = entry.describe()
         row["summary"] = _audit_summary(entry, dictionary)
 
@@ -565,12 +565,17 @@ def register(registry, venue):
             return result
 
         if entry.raw is not None:
-            # Rendered from the raw bytes rather than echoed: a redacted field
-            # must not survive in the wire string either. Decoded here, not at
-            # record time, because only an entry somebody opens needs it.
-            result["wire"] = render.raw_string(entry.raw, dictionary)
+            # Read back with the codec that recorded it: a venue may serve one
+            # protocol in more than one encoding, and bytes do not say which
+            # they are. Rendered from the raw bytes rather than echoed, so a
+            # redacted field cannot survive in the wire string -- and decoded
+            # here, not at record time, because only an opened entry needs it.
+            codec = venue.wire_codec(entry.protocol)
+            if codec is None:
+                return result
+            result["wire"] = codec.raw_string(entry.raw, dictionary)
             try:
-                message = decode(entry.raw, validate_checksum=False)
+                message = codec.decode(entry.raw, validate_checksum=False)
             except MalformedMessage:
                 # Exactly the entry an audit exists for: keep the bytes, say so.
                 return result

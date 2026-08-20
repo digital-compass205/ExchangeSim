@@ -23,6 +23,12 @@ class Venue(object):
     #: Short identifier used in config files and the venue registry.
     key = "base"
 
+    #: Wire codecs by protocol name, filled by :meth:`setup`. Anything that has
+    #: to read a recorded message back -- the audit view -- looks the codec up
+    #: here rather than assuming tag=value FIX, because HKEX serves the same
+    #: protocol in two encodings and an entry knows which one recorded it.
+    codecs = {}
+
     def __init__(self, config, reactor, publisher):
         self.config = config
         self.reactor = reactor
@@ -92,6 +98,25 @@ class Venue(object):
         runtime places it where the wire protocol would.
         """
         return list(self.markets.values())
+
+    def wire_codec(self, protocol=None):
+        """The codec that produced a recorded message, or the venue's only one.
+
+        Falls back rather than raising: an audit entry recorded before a venue
+        named its codecs, or by a venue that has none, is still worth showing.
+        """
+        codecs = self.codecs or {}
+        if protocol and protocol in codecs:
+            return codecs[protocol]
+        return codecs.get("fix")
+
+    def dictionary_for(self, protocol=None):
+        """The dialect a recorded message should be read against.
+
+        Only differs from ``self.dictionary`` at a venue whose two encodings
+        table the same messages differently.
+        """
+        return getattr(self, "dictionary", None)
 
     def describe(self):
         """Summary returned by the ``venue.info`` control command."""

@@ -23,12 +23,10 @@ from ..audit import DIRECTION_IN, DIRECTION_OUT
 from . import constants as C
 from .dictionary import Failure
 from .render import extract, symbol_of
+from .codec import FixCodec
 from .message import (
     MalformedMessage,
-    Framer,
     Message,
-    decode,
-    encode,
 )
 
 log = logging.getLogger(__name__)
@@ -73,14 +71,16 @@ class SessionConfig(object):
                  "begin_string", "reset_on_logon", "cancel_on_disconnect",
                  "default_sub_id", "allowed_sub_ids", "validate_unknown_tags",
                  "next_expected_seq_num", "allow_logon_reset", "appl_ver_id",
-                 "default_appl_ver_id")
+                 "default_appl_ver_id", "requires_encrypt_method",
+                 "requires_heart_bt_int")
 
     def __init__(self, sender_comp_id, target_comp_id, heartbeat_interval=30,
                  begin_string="FIX.4.2", reset_on_logon=False,
                  cancel_on_disconnect=False, default_sub_id=None,
                  allowed_sub_ids=None, validate_unknown_tags=True,
                  next_expected_seq_num=False, allow_logon_reset=True,
-                 appl_ver_id=None, default_appl_ver_id=None):
+                 appl_ver_id=None, default_appl_ver_id=None,
+                 requires_encrypt_method=True, requires_heart_bt_int=True):
         self.sender_comp_id = sender_comp_id
         self.target_comp_id = target_comp_id
         self.heartbeat_interval = heartbeat_interval
@@ -105,6 +105,15 @@ class SessionConfig(object):
         #: DefaultApplVerID(1137) echoed on the Logon response.
         self.default_appl_ver_id = default_appl_ver_id
 
+        # -- fields a Logon negotiates, which not every encoding of FIX has.
+        # The binary encoding of OCG-C carries neither: its encryption is fixed
+        # by the protocol and its heartbeat interval is agreed out of band.
+
+        #: Require EncryptMethod(98) on Logon and refuse anything but None.
+        self.requires_encrypt_method = requires_encrypt_method
+        #: Take the heartbeat interval from HeartBtInt(108) on Logon.
+        self.requires_heart_bt_int = requires_heart_bt_int
+
     @property
     def key(self):
         return (self.begin_string, self.sender_comp_id, self.target_comp_id)
@@ -114,10 +123,14 @@ class Session(object):
     """One FIX session. At most one transport may be attached at a time."""
 
     def __init__(self, config, store, clock, dictionary, application=None,
-                 audit=None):
+                 audit=None, codec=None):
         self.config = config
         self.store = store
         self.clock = clock
+        #: How this session's bytes are framed, decoded and encoded. Every use
+        #: of the wire format goes through it, which is what lets HKEX serve
+        #: the same protocol in its tag=value and binary encodings at once.
+        self.codec = codec or FixCodec(config.begin_string)
         self.dictionary = dictionary
         self.application = application or Application()
         #: Message recorder, or None when the venue has the audit switched off.
@@ -127,12 +140,13 @@ class Session(object):
         self.transport = None
         self.heartbeat_interval = config.heartbeat_interval
 
-        self._framer = Framer()
+        self._framer = self.codec.framer()
         self._pending = {}            # seq -> Message, awaiting gap closure
         self._resend_requested = False
         self._last_sent = 0.0
         self._last_received = 0.0
         self._test_request_sent = None
+        self._test_request_id = 0
         self._logout_reason = None
         #: Set while replaying, so replayed messages skip normal send handling.
         self._replaying = False
@@ -159,6 +173,22 @@ class Session(object):
     def logged_on(self):
         return self.state == SessionState.ACTIVE
 
+    @property
+    def wire(self):
+        """Which encoding this session speaks: ``fix`` or ``binary``."""
+        return self.codec.name
+
+    def _next_test_request_id(self):
+        """A short numeric TestReqID, which every encoding can carry.
+
+        The binary encoding holds it in a UInt16, so it wraps rather than
+        growing: the value only has to come back on the answering Heartbeat,
+        and one that is already outstanding stops the session before it could
+        be reused.
+        """
+        self._test_request_id = self._test_request_id % 65535 + 1
+        return self._test_request_id
+
     def __repr__(self):
         return "Session(%s->%s, %s)" % (
             self.sender_comp_id, self.target_comp_id, self.state)
@@ -174,6 +204,7 @@ class Session(object):
             "heartbeat_interval": self.heartbeat_interval,
             "default_sub_id": self.config.default_sub_id,
             "cancel_on_disconnect": self.config.cancel_on_disconnect,
+            "protocol": self.wire,
         }
 
     # -- audit -------------------------------------------------------------
@@ -198,7 +229,7 @@ class Session(object):
         audit.record_message(
             direction, self.target_comp_id, message=message, raw=raw,
             type_name=type_name, extracted=extracted, symbol=symbol,
-            error=error)
+            error=error, protocol=self.codec.name)
 
     # -- transport ---------------------------------------------------------
 
@@ -260,7 +291,7 @@ class Session(object):
 
     def _on_raw_message(self, raw):
         try:
-            message = decode(raw)
+            message = self.codec.decode(raw)
         except MalformedMessage as exc:
             log.warning("%s malformed message: %s", self, exc)
             self._record(DIRECTION_IN, None, raw,
@@ -403,17 +434,19 @@ class Session(object):
             self._logout_and_disconnect("already logged on")
             return
 
-        encrypt = message.get(C.ENCRYPT_METHOD)
-        if encrypt != C.EncryptMethod.NONE:
-            self._logout_and_disconnect(
-                "EncryptMethod (98) %s is not supported" % encrypt)
-            return
+        if self.config.requires_encrypt_method:
+            encrypt = message.get(C.ENCRYPT_METHOD)
+            if encrypt != C.EncryptMethod.NONE:
+                self._logout_and_disconnect(
+                    "EncryptMethod (98) %s is not supported" % encrypt)
+                return
 
-        interval = message.get_int(C.HEART_BT_INT)
-        if interval is None or interval < 0:
-            self._logout_and_disconnect("invalid HeartBtInt (108)")
-            return
-        self.heartbeat_interval = interval
+        if self.config.requires_heart_bt_int:
+            interval = message.get_int(C.HEART_BT_INT)
+            if interval is None or interval < 0:
+                self._logout_and_disconnect("invalid HeartBtInt (108)")
+                return
+            self.heartbeat_interval = interval
 
         if (message.get(C.RESET_SEQ_NUM_FLAG) == C.YES
                 and not self.config.allow_logon_reset):
@@ -575,7 +608,7 @@ class Session(object):
 
         for seq in range(begin, upper + 1):
             raw = stored.get(seq)
-            if raw is None or _is_admin(raw):
+            if raw is None or self.codec.is_admin(raw):
                 if gap_start is None:
                     gap_start = seq
                 continue
@@ -590,7 +623,7 @@ class Session(object):
     def _resend(self, seq, raw):
         """Retransmit one stored application message as a possible duplicate."""
         try:
-            message = decode(raw, validate_checksum=False)
+            message = self.codec.decode(raw, validate_checksum=False)
         except MalformedMessage:
             log.error("%s cannot decode stored message %d; gap-filling instead",
                       self, seq)
@@ -635,7 +668,16 @@ class Session(object):
             # dialect requires it on everything the venue generates.
             message.set(C.APPL_VER_ID, self.config.appl_ver_id)
 
-        raw = encode(message, self.config.begin_string)
+        try:
+            raw = self.codec.encode(message)
+        except (ValueError, KeyError) as exc:
+            # A message this session's encoding cannot express is a fault in
+            # the venue, not in the client -- but it must not take the reactor
+            # down with it, and the audit is where somebody will look for it.
+            log.error("%s cannot encode %s: %s", self, message.msg_type, exc)
+            self._record(DIRECTION_OUT, message, None,
+                         "not encodable as %s: %s" % (self.codec.name, exc))
+            return None
 
         # A resent message is recorded again, deliberately: it was sent again.
         # PossDupFlag=Y is in the summary, so two entries carrying one MsgSeqNum
@@ -732,19 +774,9 @@ class Session(object):
 
         if silence >= self.heartbeat_interval * HEARTBEAT_GRACE:
             request = Message.create(C.TEST_REQUEST)
-            request.set(C.TEST_REQ_ID, "TR-%d" % int(now * 1000))
+            request.set(C.TEST_REQ_ID, str(self._next_test_request_id()))
             self.send(request)
             self._test_request_sent = now
-
-
-def _is_admin(raw):
-    """True when a stored raw message is administrative and must not be replayed."""
-    marker = raw.find(b"\x0135=")
-    if marker < 0:
-        return False
-    end = raw.find(b"\x01", marker + 1)
-    msg_type = raw[marker + 4:end].decode("latin-1")
-    return msg_type in C.ADMIN_MSG_TYPES
 
 
 _ADMIN_HANDLERS = {

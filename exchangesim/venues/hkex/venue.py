@@ -35,11 +35,14 @@ from ...core.instrument import (
 )
 from ...core.market import Market
 from ...core.prices import PriceCodec
+from ...binary.codec import BinaryCodec
 from ...fix.acceptor import Acceptor, SessionManager
+from ...fix.codec import FixCodec
 from ...fix import constants as C
 from ...fix.session import SessionConfig
 from ..base import Venue
 from . import commands as venue_commands
+from . import binary as binary_layouts
 from . import dictionary as D
 from . import rules
 from .auctions import AuctionSession
@@ -51,6 +54,16 @@ log = logging.getLogger(__name__)
 PRICE_DECIMALS = 3
 
 BEGIN_STRING = "FIXT.1.1"
+
+#: The two encodings of OCG-C a session may be registered for. HKEX publishes
+#: the same protocol as tag=value FIX and as a fixed-width binary format, and a
+#: Comp ID is entitled to one of them.
+PROTOCOL_FIX = "fix"
+PROTOCOL_BINARY = "binary"
+
+#: Where the binary listener goes when a session asks for one and the config
+#: does not say. Adjacent to the FIX port, as the real venue keeps them apart.
+DEFAULT_BINARY_PORT = 9012
 
 #: Which auction a trading phase belongs to. PRE_OPEN and OPENING_AUCTION are
 #: the two periods of one POS, so moving between them continues the session
@@ -113,7 +126,13 @@ class HkexVenue(Venue):
         self.engine = None
         self.application = None
         self.manager = None
+        #: One acceptor per encoding of the protocol; see :meth:`_build_fix`.
         self.acceptor = None
+        self.binary_acceptor = None
+        #: The FIXT.1.1 dialect and, when a binary session is configured, the
+        #: binary one. Both describe OCG-C; each is its own published table.
+        self.binary_dictionary = None
+        self.binary_layouts = None
         self._band_table = rules.NineTimesRule()
         self._tick_table = None
 
@@ -127,8 +146,9 @@ class HkexVenue(Venue):
         self._build_fix()
 
     def teardown(self):
-        if self.acceptor is not None:
-            self.acceptor.stop()
+        for acceptor in (self.acceptor, self.binary_acceptor):
+            if acceptor is not None:
+                acceptor.stop()
         if self.manager is not None:
             self.manager.close()
 
@@ -394,6 +414,16 @@ class HkexVenue(Venue):
     # -- FIX ---------------------------------------------------------------
 
     def _build_fix(self):
+        """Build the session table and one acceptor per encoding in use.
+
+        HKEX publishes OCG-C twice: tag=value FIX and a fixed-width binary
+        encoding of the same protocol. A Comp ID is registered for one of them,
+        so there is one session table and one set of books; what differs per
+        session is the codec that frames its bytes and the dialect table its
+        messages are validated against. The binary listener is started only
+        when a session asks for it -- a venue does not open a port nobody has
+        been given.
+        """
         fix = self.config.section("fix")
         sender_comp_id = fix.get("sender_comp_id", "HKEXSIM")
         store_root = self.config.resolve_path("fix.store")
@@ -401,16 +431,36 @@ class HkexVenue(Venue):
         self.application = HkexApplication(self)
         self.manager = SessionManager(self.clock, self.dictionary, store_root,
                                       audit=self.audit)
+        self.codecs = {"fix": FixCodec(fix.get("begin_string", BEGIN_STRING))}
 
         sessions = fix.get("sessions") or []
         if not sessions:
             log.warning("venue '%s' has no FIX sessions configured", self.name)
+
+        seen = set()
+        binary_sessions = 0
 
         for entry in sessions:
             target = entry.get("target_comp_id")
             if not target:
                 raise ConfigError(
                     "each entry of 'fix.sessions' needs a 'target_comp_id'")
+            if target in seen:
+                # One Comp ID, one session: the protocols share a table, so a
+                # repeat would otherwise quietly replace the earlier entry.
+                raise ConfigError(
+                    "'fix.sessions' names target_comp_id '%s' twice" % target)
+            seen.add(target)
+
+            protocol = entry.get("protocol", PROTOCOL_FIX)
+            if protocol not in (PROTOCOL_FIX, PROTOCOL_BINARY):
+                raise ConfigError(
+                    "session '%s' has protocol '%s'; it must be '%s' or '%s'"
+                    % (target, protocol, PROTOCOL_FIX, PROTOCOL_BINARY))
+            binary = protocol == PROTOCOL_BINARY
+            if binary:
+                binary_sessions += 1
+                self._build_binary_dialect(sender_comp_id)
 
             segments = entry.get("markets") or sorted(self.markets)
             unknown = [name for name in segments if name not in self.markets]
@@ -424,7 +474,8 @@ class HkexVenue(Venue):
                     sender_comp_id=sender_comp_id,
                     target_comp_id=target,
                     heartbeat_interval=entry.get("heartbeat_interval", 20),
-                    begin_string=fix.get("begin_string", BEGIN_STRING),
+                    begin_string=(D.BINARY_BEGIN_STRING if binary
+                                  else fix.get("begin_string", BEGIN_STRING)),
                     cancel_on_disconnect=entry.get("cancel_on_disconnect", True),
                     # No SubID routing: the security picks the segment. The
                     # allowed set is still enforced, in the handler.
@@ -432,13 +483,46 @@ class HkexVenue(Venue):
                     allowed_sub_ids=segments,
                     next_expected_seq_num=True,
                     allow_logon_reset=False,
-                    appl_ver_id=C.ApplVerID.FIX50SP2,
-                    default_appl_ver_id=C.ApplVerID.FIX50SP2),
-                self.application)
+                    # The binary Logon carries neither field: its encryption is
+                    # fixed by the encoding and its heartbeat agreed out of band.
+                    requires_encrypt_method=not binary,
+                    requires_heart_bt_int=not binary,
+                    appl_ver_id=None if binary else C.ApplVerID.FIX50SP2,
+                    default_appl_ver_id=(None if binary
+                                         else C.ApplVerID.FIX50SP2)),
+                self.application,
+                codec=self.codecs[protocol],
+                dictionary=self.binary_dictionary if binary else self.dictionary)
 
         self.acceptor = Acceptor(self.reactor, self.manager,
-                                 fix.get("begin_string", BEGIN_STRING))
+                                 self.codecs[PROTOCOL_FIX], self.dictionary)
         self.acceptor.start(fix.get("host", "127.0.0.1"), fix.get("port", 9011))
+
+        if binary_sessions:
+            binary_config = self.config.section("binary")
+            # Only the first acceptor polls the session table: they share it,
+            # and ticking it twice a second would halve every heartbeat.
+            self.binary_acceptor = Acceptor(
+                self.reactor, self.manager, self.codecs[PROTOCOL_BINARY],
+                self.binary_dictionary, tick=False)
+            self.binary_acceptor.start(
+                binary_config.get("host", fix.get("host", "127.0.0.1")),
+                binary_config.get("port", DEFAULT_BINARY_PORT))
+
+    def _build_binary_dialect(self, sender_comp_id):
+        """The binary dictionary, layouts and codec, built once on demand."""
+        if self.binary_dictionary is not None:
+            return
+        self.binary_dictionary = D.build_binary()
+        self.binary_layouts = binary_layouts.build(self.binary_dictionary)
+        self.codecs[PROTOCOL_BINARY] = BinaryCodec(self.binary_layouts,
+                                                   sender_comp_id)
+
+    def dictionary_for(self, protocol=None):
+        """The dialect a recorded message should be read against."""
+        if protocol == PROTOCOL_BINARY and self.binary_dictionary is not None:
+            return self.binary_dictionary
+        return self.dictionary
 
     # -- trading state -----------------------------------------------------
 
@@ -602,6 +686,8 @@ class HkexVenue(Venue):
             "markets": [market.describe() for market in self.markets.values()],
             "instruments": len(self.instruments),
             "fix_port": self.acceptor.address[1] if self.acceptor else None,
+            "binary_port": (self.binary_acceptor.address[1]
+                            if self.binary_acceptor else None),
             "sessions": len(self.manager.sessions) if self.manager else 0,
         })
         return summary

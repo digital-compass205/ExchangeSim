@@ -20,7 +20,8 @@ HEADER_TAGS = (
 TRAILER_TAGS = (C.CHECKSUM,)
 
 
-def session_fields(sub_id_in_length=30, sub_id_out_length=4, sub_id_labels=None):
+def session_fields(sub_id_in_length=30, sub_id_out_length=4, sub_id_labels=None,
+                   timestamp_decimals=3):
     """Field definitions for the standard header, trailer and admin bodies.
 
     ``SenderSubID``/``TargetSubID`` lengths differ by direction at Japannext
@@ -46,14 +47,16 @@ def session_fields(sub_id_in_length=30, sub_id_out_length=4, sub_id_labels=None)
         FieldDef(C.SENDER_SUB_ID, "SenderSubID", T.STRING,
                  max_length=max(sub_id_in_length, sub_id_out_length),
                  labels=sub_id_labels),
-        FieldDef(C.SENDING_TIME, "SendingTime", T.UTC_TIMESTAMP),
+        FieldDef(C.SENDING_TIME, "SendingTime", T.UTC_TIMESTAMP,
+                 max_decimals=timestamp_decimals),
         FieldDef(C.TARGET_COMP_ID, "TargetCompID", T.STRING, max_length=32),
         FieldDef(C.TARGET_SUB_ID, "TargetSubID", T.STRING,
                  max_length=max(sub_id_in_length, sub_id_out_length),
                  labels=sub_id_labels),
         FieldDef(C.POSS_DUP_FLAG, "PossDupFlag", T.BOOLEAN),
         FieldDef(C.POSS_RESEND, "PossResend", T.BOOLEAN),
-        FieldDef(C.ORIG_SENDING_TIME, "OrigSendingTime", T.UTC_TIMESTAMP),
+        FieldDef(C.ORIG_SENDING_TIME, "OrigSendingTime", T.UTC_TIMESTAMP,
+                 max_decimals=timestamp_decimals),
         FieldDef(C.CHECKSUM, "CheckSum", T.STRING, max_length=3),
 
         # -- admin bodies --
@@ -106,7 +109,8 @@ def session_messages():
 
 
 def build_session_dictionary(begin_string="FIX.4.2", fields=(), messages=(),
-                             header=None, sub_id_labels=None):
+                             header=None, sub_id_labels=None,
+                             timestamp_decimals=3):
     """Compose the session layer with a venue's application definitions.
 
     Venue fields and messages are applied last and overwrite by tag and by
@@ -115,10 +119,14 @@ def build_session_dictionary(begin_string="FIX.4.2", fields=(), messages=(),
     to Logon -- supplies its own definition rather than needing a hook here.
     ``header`` names the tags legal in any message, which differ by dialect:
     Japannext routes markets by SubID, HKEX has no SubID at all.
+    ``timestamp_decimals`` is how much of a fraction the dialect's timestamps
+    carry: three at Japannext, six at HKEX, which documents microseconds.
     """
     return Dictionary(
         begin_string=begin_string,
-        fields=list(session_fields(sub_id_labels=sub_id_labels)) + list(fields),
+        fields=list(session_fields(sub_id_labels=sub_id_labels,
+                                   timestamp_decimals=timestamp_decimals))
+               + list(fields),
         messages=session_messages() + list(messages),
         header=HEADER_TAGS if header is None else header,
         trailer=TRAILER_TAGS,

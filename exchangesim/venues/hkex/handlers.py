@@ -49,6 +49,10 @@ log = logging.getLogger(__name__)
 #: OrderID reported when no order was created.
 NO_ORDER_ID = "NONE"
 
+#: The encoding whose Execution Report absorbs the OrderCancelReject; see
+#: :meth:`HkexApplication._for_wire`.
+WIRE_BINARY = "binary"
+
 #: PartyRoles this venue reads off an inbound order.
 _BROKER = D.PartyRole.EXECUTING_FIRM
 _BCAN = D.PartyRole.CLIENT_ID
@@ -373,6 +377,7 @@ class HkexApplication(Application):
 
     def _deliver(self, target, message, order):
         """Send a report, honouring any injected drop or delay."""
+        message = self._for_wire(target, message, order)
         behaviour = self.engine.behaviour
         if not behaviour.active or order is None:
             target.send(message)
@@ -392,6 +397,75 @@ class HkexApplication(Application):
         log.info("delaying %s for order %s by %dms (injected behaviour)",
                  message.get(D.EXEC_TYPE), order.order_id, rule.delay_ms)
         self.venue.reactor.call_later(delay, lambda: target.send(message))
+
+    def _for_wire(self, session, message, order=None):
+        """Adapt a report to the encoding this session actually speaks.
+
+        The two published encodings of OCG-C describe one protocol and differ
+        in exactly one outbound message. FIX refuses a cancel or an amend with
+        an OrderCancelReject (35=9); binary has no such message and reports the
+        same refusal as an Execution Report with ExecType X or Y, carrying the
+        order's identity and running totals -- which 35=9 has no fields for.
+
+        Rebuilding it belongs here rather than in the codec: the missing fields
+        come from the order, and a codec that reached for one would be a
+        gateway. Everything else the two encodings share, field for field.
+        """
+        if session.wire != WIRE_BINARY:
+            return message
+        if message.msg_type != C.ORDER_CANCEL_REJECT:
+            return message
+        return self._cancel_reject_as_report(session, message, order)
+
+    def _cancel_reject_as_report(self, session, reject, order):
+        """An OrderCancelReject as the binary encoding's Execution Report."""
+        is_replace = (reject.get(D.CXL_REJ_RESPONSE_TO)
+                      == D.CxlRejResponseTo.CANCEL_REPLACE_REQUEST)
+        if order is None:
+            order = self.engine.registry.resolve(
+                session.key, reject.get(D.ORIG_CL_ORD_ID))
+
+        report = Message.create(C.EXECUTION_REPORT)
+        report.set(D.EXEC_ID, self.exec_ids.next())
+        report.set_if(D.CL_ORD_ID, reject.get(D.CL_ORD_ID))
+        report.set_if(D.ORIG_CL_ORD_ID, reject.get(D.ORIG_CL_ORD_ID))
+        report.set_if(D.ORDER_ID, reject.get(D.ORDER_ID))
+        report.set(D.TRANSACT_TIME,
+                   reject.get(D.TRANSACT_TIME) or self.clock.timestamp())
+        report.set_if(D.ORD_STATUS, reject.get(D.ORD_STATUS))
+        report.set(D.EXEC_TYPE, D.ExecType.AMEND_REJECT if is_replace
+                   else D.ExecType.CANCEL_REJECT)
+        report.set_if(D.CXL_REJ_REASON, reject.get(D.CXL_REJ_REASON))
+        report.set_if(D.REJECT_TEXT, reject.get(D.REJECT_TEXT))
+
+        if order is None:
+            # ASSUMPTION: nothing identifies the order -- an unknown
+            # OrigClOrdID is the commonest reason to refuse a cancel at all --
+            # so the instrument and side the specification marks required are
+            # simply absent, and the totals are zero. The alternative is to
+            # echo the client's own request back as if it were an order the
+            # venue holds, which would be worse than saying nothing.
+            report.set(D.CUM_QTY, 0)
+            report.set(D.LEAVES_QTY, 0)
+            for tag in (D.NO_PARTY_IDS, D.PARTY_ID, D.PARTY_ID_SOURCE,
+                        D.PARTY_ROLE):
+                for value in reject.get_all(tag):
+                    report.append(tag, value)
+            return report
+
+        self._set_parties(report, order)
+        self._set_instrument(report, order.symbol)
+        report.set(D.SIDE, rules.SIDE_TO_FIX.get(order.side, D.SideValue.BUY))
+        report.set(D.ORD_TYPE, rules.ORD_TYPE_TO_FIX.get(
+            order.order_type, D.OrdType.LIMIT))
+        report.set_if(D.TIME_IN_FORCE,
+                      rules.TIF_TO_FIX.get(order.time_in_force))
+        report.set(D.ORDER_QTY, order.quantity)
+        if order.price is not None:
+            report.set(D.PRICE, self.codec.format(order.price))
+        report.set(D.CUM_QTY, order.cum_qty)
+        report.set(D.LEAVES_QTY, order.leaves_qty)
+        return report
 
     def _session_for(self, event, fallback):
         """The session that owns the order an event concerns.
@@ -634,7 +708,10 @@ class HkexApplication(Application):
                    else D.CxlRejResponseTo.CANCEL_REQUEST)
         reject.set(D.CXL_REJ_REASON, reason)
         reject.set(D.REJECT_TEXT, _truncate(text))
-        session.send(reject)
+        # Through _deliver so the encoding adaptation applies here too, but
+        # with no order attached: injected drops and delays are aimed at an
+        # order's reports, and this reject is a refusal to touch one.
+        self._deliver(session, reject, None)
 
     def _mass_cancel_report(self, message, response):
         report = Message.create(D.ORDER_MASS_CANCEL_REPORT)

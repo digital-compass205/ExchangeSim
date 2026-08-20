@@ -59,6 +59,8 @@ exchangesim/
                 market data, validation, prices, reactor
   fix/          protocol-generic FIX: codec, dictionary, session layer
                 (4.2 and FIXT.1.1), persistent store, acceptor, field naming
+  binary/       the second encoding OCG-C publishes: frame, data types,
+                presence map, and the codec that turns one into a fix.Message
   venues/
     common_commands.py  every venue-agnostic control command
     japannext/  the Japannext dialect, rules, handlers and reference data
@@ -72,7 +74,7 @@ config/         one JSON file per venue instance, plus the web board's
 scenarios/      example scenarios; the CI suite
 deploy/         systemd unit and install script
 tools/          pdftext.py, a stdlib PDF text extractor for reading venue specs
-tests/          1,092 tests, unittest only
+tests/          1,169 tests, unittest only
 ```
 
 Three layers with a hard dependency rule — arrows point inwards only, and
@@ -113,6 +115,51 @@ the word "HKEX".
 | Auctions | none — the rules say so outright | POS and CAS |
 | Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)` |
 | Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message |
+| Encodings | tag=value FIX | tag=value FIX **and** a binary encoding of the same protocol, on separate ports |
+
+### One protocol, two encodings
+
+HKEX publishes OCG-C as tag=value FIX and as a fixed-width binary format, and
+entitles a client to one of them. Both are served here, and the second one is a
+**codec, not a second gateway**: `binary/` decodes a frame into the same
+`fix.Message` everything above it already speaks, and encodes one back.
+
+```
+  BROKER1 (tag=value)          BROKER3 (binary)
+        |  9011                      |  9012
+   FixCodec                     BinaryCodec        <- the only place that
+        \____________  ________/                     knows which is which
+                     \/
+              Session (one per Comp ID)
+                     |
+              HkexApplication  -> engine -> one book per segment
+```
+
+A session names its encoding in the config and gets the matching codec, dialect
+table and acceptor; the session table, the books, the control plane and the
+audit are shared, so a binary client and a FIX client trade with each other and
+appear on one tape. The audit entry records which codec produced it, and reads
+it back with that same codec — a binary message opens as a hex dump.
+
+What actually differs, beyond the bytes, is small and each piece has a home:
+
+* **One Comp ID on the wire, the client's**, in both directions. The codec fills
+  in the venue's own identity, so the session layer's CompID checks are unchanged.
+* **No SendingTime, BeginString or ApplVerID** — the binary header is what
+  section 7.2 lists and nothing else.
+* **Logon carries no EncryptMethod and no HeartBtInt**, so two `SessionConfig`
+  flags say whether a Logon negotiates them. Both default on: FIX is untouched.
+* **A Reject is replayed on a resend**, where FIX practice gap-fills it.
+* **No OrderCancelReject.** A refused cancel or amend is an Execution Report
+  with `ExecType` `X` or `Y`, carrying the order's identity and running totals —
+  which 35=9 has no fields for. The gateway builds that form for a binary
+  session (`handlers.py:_for_wire`), because the extra fields come from the
+  order and a codec that reached for one would be a gateway.
+* **`<Parties>` is four flat broker fields and the disclosure group a bitmap**,
+  read and written by getters in `venues/hkex/binary.py`.
+* **Its required-field table is its own**: a Cancel Request has no OrderQty and
+  SecurityExchange is optional throughout, so `dictionary.build_binary()` is a
+  separate transcription rather than a flag on the FIX one.
 
 ## Auctions
 
@@ -216,7 +263,8 @@ Japannext counterpart:
 {
   "markets": [{"name": "MAIN"}, {"name": "GEM"}],
   "smp": [{"id": "SMP0001", "instruction": "CANCEL_AGGRESSIVE"}],
-  "limits": {"price_band_spreads": 24}
+  "limits": {"price_band_spreads": 24},
+  "binary": {"host": "127.0.0.1", "port": 9012}
 }
 ```
 
@@ -225,6 +273,18 @@ names one — a security belongs to exactly one segment, and that decides which
 book the order reaches. `smp` pre-registers the self-match prevention
 instructions the real exchange holds against each `SelfMatchPreventionID` out of
 band; `smp.register` adds more at runtime.
+
+A session states which of the venue's two encodings it speaks, and connects to
+that encoding's port:
+
+```json
+{"target_comp_id": "BROKER3", "protocol": "binary", "markets": ["MAIN", "GEM"]}
+```
+
+`protocol` defaults to `"fix"`, so an existing config is unchanged. The `binary`
+listener starts only when a session asks for one — a venue does not open a port
+nobody has been given — and a Comp ID belongs to exactly one encoding: offered
+the wrong one, the venue refuses the connection with a Logout saying so.
 
 `audit.capacity` is how many messages and commands the audit view keeps, newest
 wins. `0` switches recording off entirely, and costs nothing at all on the
@@ -555,7 +615,11 @@ Price band tables, by contrast, are exact.
 **HKEX** — the venue implements board-lot continuous trading plus the POS and
 CAS auctions. Deliberately not built, and rejected rather than faked: the
 odd/special lot book and its trade-request flow, quotes, trade capture, drop
-copy, and the Volatility Control Mechanism. Beyond that:
+copy, and the Volatility Control Mechanism. Both published encodings of the
+protocol are served; in the binary one the Lookup service (message types 7 and
+8), on-behalf-of cancels (23, 24) and the entitlement and throttle queries
+(25–28) are likewise unbuilt, and a client sending one gets a Reject naming an
+invalid message type rather than a half-answer. Beyond that:
 
 - **auction periods have no timings.** They are driven by `state.set` and
   `auction.lock` rather than by the published schedule, so a test never waits and
@@ -566,6 +630,13 @@ copy, and the Volatility Control Mechanism. Beyond that:
   `auction.reference` sets it explicitly.
 - `EncryptedPassword(1402)` is required on Logon but **not verified**: it is RSA
   encrypted under the venue's public key, and a simulator holds no private key.
+  The binary Logon's `Password` field is treated the same way.
+- in the **binary encoding**, three details are read rather than stated: the
+  `Gap Fill` value list is a graphic the specification's text layer does not
+  carry (taken as `Y`/`N`, which its Byte type supports and its numeric flags
+  contradict); `Disclosure Instructions` bit 0 is read as the least significant
+  bit of the word; and the Execution Report refusing a cancel for an **unknown**
+  order carries no instrument or side, there being no order to describe.
 - an unfilled IOC, FOK or market-order balance reports `ExecType=C` (Expired)
   rather than 4 (Cancelled); the specification defines both and says which
   applies to neither.

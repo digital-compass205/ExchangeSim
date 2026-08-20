@@ -27,17 +27,31 @@
     "sessions": [
       {
         "target_comp_id": "BROKER1",
+        "protocol": "fix",
         "heartbeat_interval": 20,
         "markets": ["MAIN", "GEM"],
         "cancel_on_disconnect": true
       },
       {
         "target_comp_id": "BROKER2",
+        "protocol": "fix",
         "heartbeat_interval": 20,
         "markets": ["MAIN", "GEM"],
         "cancel_on_disconnect": false
+      },
+      {
+        "target_comp_id": "BROKER3",
+        "protocol": "binary",
+        "heartbeat_interval": 20,
+        "markets": ["MAIN", "GEM"],
+        "cancel_on_disconnect": true
       }
     ]
+  },
+
+  "binary": {
+    "host": "127.0.0.1",
+    "port": 9012
   },
 
   "markets": [
@@ -66,6 +80,13 @@
   "tape_length": 500,
 
   "_notes": [
+    "HKEX publishes OCG-C in two encodings of one protocol: tag=value FIX and",
+    "a fixed-width binary format. A Comp ID is entitled to one of them, so",
+    "each session names its 'protocol' and connects to that encoding's port:",
+    "'fix' on fix.port, 'binary' on binary.port. The binary listener starts",
+    "only when a session asks for one, and both encodings share one set of",
+    "books, one session table and one audit.",
+    "",
     "Markets are SEHK market segments (MarketSegmentID 1300). Unlike Japannext",
     "there is no SubID routing: a security belongs to exactly one segment, set",
     "by the 'segment' column of reference/securities.csv, and that decides",

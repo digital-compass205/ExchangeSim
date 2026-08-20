@@ -14,13 +14,11 @@ import logging
 
 from ..audit import DIRECTION_IN, DIRECTION_OUT
 from . import constants as C
+from .codec import FixCodec
 from .message import (
     IncompleteMessage,
     MalformedMessage,
     Message,
-    decode,
-    encode,
-    extract,
 )
 from .session import Session
 from .store import FileStore, MemoryStore, session_directory
@@ -44,8 +42,14 @@ class SessionManager(object):
         self.audit = audit
         self._sessions = {}     # (sender, target) -> Session
 
-    def add(self, config, application=None):
-        """Create a session from its config, wiring up a store."""
+    def add(self, config, application=None, codec=None, dictionary=None):
+        """Create a session from its config, wiring up a store.
+
+        ``codec`` and ``dictionary`` default to the manager's, and are given
+        per session by a venue that serves one protocol in more than one
+        encoding: the Comp ID belongs to exactly one of them, so the session
+        table stays single and every control command still sees them all.
+        """
         if self.store_root:
             store = FileStore(session_directory(
                 self.store_root, config.sender_comp_id, config.target_comp_id))
@@ -53,8 +57,9 @@ class SessionManager(object):
             store = MemoryStore()
         store.open()
 
-        session = Session(config, store, self.clock, self.dictionary,
-                          application, audit=self.audit)
+        session = Session(config, store, self.clock,
+                          dictionary or self.dictionary,
+                          application, audit=self.audit, codec=codec)
         self._sessions[(config.sender_comp_id, config.target_comp_id)] = session
         log.info("session configured: %s -> %s (next_out=%d, next_in=%d)",
                  config.sender_comp_id, config.target_comp_id,
@@ -104,9 +109,10 @@ class _Router(object):
 
     def on_data(self, conn, chunk):
         self.buffer += chunk
+        codec = self.acceptor.codec
 
         try:
-            raw, _rest = extract(self.buffer)
+            raw, _rest = codec.extract(self.buffer)
         except IncompleteMessage:
             if len(self.buffer) > MAX_ROUTING_BYTES:
                 log.warning("%s sent %d bytes without a complete message; closing",
@@ -116,13 +122,14 @@ class _Router(object):
                 conn.close()
             return
         except MalformedMessage as exc:
-            log.warning("%s sent an unframeable message: %s", self.peer, exc)
-            self._record(self.buffer, "unframeable message: %s" % exc)
+            reason = "unframeable message: %s%s" % (exc, self._wrong_protocol())
+            log.warning("%s sent an unframeable message: %s", self.peer, reason)
+            self._record(self.buffer, reason)
             conn.close()
             return
 
         try:
-            message = decode(raw)
+            message = codec.decode(raw)
         except MalformedMessage as exc:
             log.warning("%s sent a malformed first message: %s", self.peer, exc)
             self._record(raw, "malformed first message: %s" % exc)
@@ -130,6 +137,23 @@ class _Router(object):
             return
 
         self.acceptor.route(conn, message, self.buffer)
+
+    def _wrong_protocol(self):
+        """A hint when the bytes look like the venue's *other* encoding.
+
+        Nothing about a stream says which protocol it is, so a client aimed at
+        the wrong port of a venue that serves two produces a framing error and
+        no explanation at all. This is that explanation, and it is worth the
+        two lines: it is exactly the question somebody opens the audit with.
+        """
+        if not self.buffer:
+            return ""
+        binary_frame = self.buffer[0] == 0x02
+        if binary_frame and self.acceptor.codec.name == "fix":
+            return " (these bytes look like a binary frame, not tag=value FIX)"
+        if not binary_frame and self.buffer[:2] == b"8=":
+            return " (these bytes look like tag=value FIX, not a binary frame)"
+        return ""
 
     def _record(self, raw, error):
         """Record traffic dropped before any session could be identified.
@@ -140,7 +164,8 @@ class _Router(object):
         """
         audit = self.acceptor.manager.audit
         if audit is not None:
-            audit.record_message(DIRECTION_IN, self.peer, raw=raw, error=error)
+            audit.record_message(DIRECTION_IN, self.peer, raw=raw, error=error,
+                                 protocol=self.acceptor.codec.name)
 
     def on_close(self, _conn):
         log.debug("%s disconnected before identifying a session", self.peer)
@@ -149,10 +174,18 @@ class _Router(object):
 class Acceptor(object):
     """Listening socket that binds connections to configured sessions."""
 
-    def __init__(self, reactor, manager, begin_string="FIX.4.2"):
+    def __init__(self, reactor, manager, codec=None, dictionary=None,
+                 tick=True):
         self.reactor = reactor
         self.manager = manager
-        self.begin_string = begin_string
+        #: The encoding this port serves. A venue that publishes its protocol
+        #: in two encodings runs one acceptor per encoding, over one session
+        #: table: a Comp ID is registered for one of them, never both.
+        self.codec = codec or FixCodec()
+        self.dictionary = dictionary or manager.dictionary
+        #: Whether this acceptor polls the session table. False for the
+        #: second acceptor of a venue whose encodings share one.
+        self.tick = tick
         self._listener = None
         self._tick_timer = None
 
@@ -162,8 +195,10 @@ class Acceptor(object):
 
     def start(self, host, port):
         self._listener = self.reactor.listen(host, port, self._on_accept)
-        self._schedule_tick()
-        log.info("FIX acceptor on %s:%d", *self._listener.address[:2])
+        if self.tick:
+            self._schedule_tick()
+        log.info("%s acceptor on %s:%d", self.codec.name,
+                 *self._listener.address[:2])
         return self._listener.address
 
     def stop(self):
@@ -184,7 +219,7 @@ class Acceptor(object):
         router = _Router(conn, self)
         conn.on_data = router.on_data
         conn.on_close = router.on_close
-        log.debug("FIX connection from %s", router.peer)
+        log.debug("%s connection from %s", self.codec.name, router.peer)
 
     # -- routing -----------------------------------------------------------
 
@@ -198,6 +233,17 @@ class Acceptor(object):
                         peer, message.get(C.SENDER_COMP_ID),
                         message.get(C.TARGET_COMP_ID))
             self._refuse(conn, message, "unknown SenderCompID or TargetCompID")
+            return
+
+        if session.wire != self.codec.name:
+            # The Comp ID exists but was registered for the venue's other
+            # encoding. Answering in this one would be answering a question the
+            # client did not ask, so it is refused like an unknown session.
+            log.warning("%s: session %s speaks %s, not %s", peer,
+                        session.target_comp_id, session.wire, self.codec.name)
+            self._refuse(conn, message,
+                         "session %s is configured for the %s protocol"
+                         % (session.target_comp_id, session.wire))
             return
 
         if session.connected:
@@ -230,7 +276,7 @@ class Acceptor(object):
         logout.set(C.TARGET_COMP_ID, message.get(C.SENDER_COMP_ID) or "UNKNOWN")
         logout.set(C.SENDING_TIME, self.manager.clock.timestamp())
         logout.set(C.TEXT, reason)
-        raw = encode(logout, self.begin_string)
+        raw = self.codec.encode(logout)
 
         # Recorded here rather than in Session._transmit, which this path does
         # not reach: there is no session to transmit through, and a refusal is
@@ -240,13 +286,15 @@ class Acceptor(object):
             claimed = message.get(C.SENDER_COMP_ID) or "%s:%d" % conn.peer[:2]
             audit.record_message(DIRECTION_IN, claimed, message=message,
                                  type_name=self._type_name(message),
-                                 error="refused: %s" % reason)
+                                 error="refused: %s" % reason,
+                                 protocol=self.codec.name)
             audit.record_message(DIRECTION_OUT, claimed, message=logout,
-                                 raw=raw, type_name=self._type_name(logout))
+                                 raw=raw, type_name=self._type_name(logout),
+                                 protocol=self.codec.name)
 
         conn.send(raw)
         conn.close_when_flushed()
 
     def _type_name(self, message):
-        definition = self.manager.dictionary.message(message.msg_type)
+        definition = self.dictionary.message(message.msg_type)
         return definition.name if definition is not None else None

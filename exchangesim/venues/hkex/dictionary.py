@@ -37,6 +37,9 @@ T = C.FieldType
 ORDER_MASS_CANCEL_REQUEST = "q"
 ORDER_MASS_CANCEL_REPORT = "r"
 
+#: Fractional places OCG-C timestamps carry: microseconds, not milliseconds.
+TIMESTAMP_DECIMALS = 6
+
 # -- tag numbers -------------------------------------------------------------
 
 CL_ORD_ID = 11
@@ -133,6 +136,12 @@ class ExecType(object):
     EXPIRED = "C"
     TRADE = "F"              # FIX 5.0 spells a fill 'F', not '1'/'2'
     TRADE_CANCEL = "H"
+
+    # The binary encoding has no OrderCancelReject: it reports a refused cancel
+    # or amend as an Execution Report carrying one of these two. They never
+    # appear on a FIX session, where 35=9 says the same thing.
+    CANCEL_REJECT = "X"
+    AMEND_REJECT = "Y"
 
 
 class OrdRejReason(object):
@@ -284,6 +293,20 @@ HEADER_TAGS = (
     C.APPL_VER_ID,
 )
 
+#: What the binary header carries, section 7.2 -- and what it does not. There
+#: is no SendingTime, no OrigSendingTime and no ApplVerID: the encoding is not
+#: FIXT, so there is no session-layer version to name. TargetCompID is here
+#: because the codec fills the venue's own identity in; the wire has one Comp
+#: ID, the client's.
+BINARY_HEADER_TAGS = (
+    C.MSG_TYPE, C.MSG_SEQ_NUM, C.SENDER_COMP_ID, C.TARGET_COMP_ID,
+    C.POSS_DUP_FLAG, C.POSS_RESEND,
+)
+
+#: A binary session states no BeginString, so this is an identity rather than a
+#: version -- it keeps the two encodings' session keys and stores apart.
+BINARY_BEGIN_STRING = "OCGC.BINARY"
+
 
 # -- field definitions -------------------------------------------------------
 
@@ -350,7 +373,10 @@ def application_fields():
                  values=(TimeInForce.DAY, TimeInForce.IOC, TimeInForce.FOK,
                          TimeInForce.AT_CROSSING),
                  labels=enum_labels(TimeInForce)),
-        FieldDef(TRANSACT_TIME, "TransactTime", T.UTC_TIMESTAMP),
+        # Section 8: YYYYMMDD-HH:MM:SS.ssssss, in both encodings. A client
+        # sending microseconds is sending what its specification asks for.
+        FieldDef(TRANSACT_TIME, "TransactTime", T.UTC_TIMESTAMP,
+                 max_decimals=TIMESTAMP_DECIMALS),
         FieldDef(POSITION_EFFECT, "PositionEffect", T.CHAR,
                  values=(PositionEffect.CLOSE,),
                  labels=enum_labels(PositionEffect)),
@@ -534,10 +560,137 @@ def application_messages():
     ]
 
 
+def binary_session_messages():
+    """The administrative messages as the *binary* specification tables them.
+
+    HKEX publishes the same protocol twice, and the two tables differ in what
+    they require. The binary Logon has no EncryptMethod, no HeartBtInt and no
+    DefaultApplVerID -- the encoding fixes the first, configuration the second,
+    and there is no FIXT session layer to name a version of -- while its Reject
+    may carry the ClOrdID of what it refused, which the FIX one may not.
+    """
+    return [
+        MessageDef(
+            C.LOGON, "Logon",
+            required=(C.NEXT_EXPECTED_MSG_SEQ_NUM, C.ENCRYPTED_PASSWORD),
+            optional=(C.ENCRYPTED_NEW_PASSWORD, C.SESSION_STATUS,
+                      C.TEST_MESSAGE_INDICATOR, C.TEXT)),
+
+        MessageDef(
+            C.LOGOUT, "Logout",
+            optional=(C.SESSION_STATUS, C.TEXT)),
+
+        MessageDef(
+            C.REJECT, "Reject",
+            required=(C.SESSION_REJECT_REASON, C.REF_SEQ_NUM),
+            optional=(C.TEXT, C.REF_TAG_ID, C.REF_MSG_TYPE, CL_ORD_ID)),
+    ]
+
+
+def binary_application_messages():
+    """The business messages as the binary specification tables them.
+
+    Three rows differ from the FIX tables and each is a real difference, not a
+    transcription slip:
+
+    * a Cancel Request carries no ``OrderQty`` -- the FIX encoding requires one;
+    * ``SecurityExchange`` is optional throughout, where FIX's ``<Instrument>``
+      block requires it alongside the source;
+    * an Execution Report may carry a cancel or amend reject code, because this
+      encoding has no separate OrderCancelReject message to put one on.
+    """
+    instrument_required = (SECURITY_ID, SECURITY_ID_SOURCE)
+    parties = _PARTIES
+    disclosure = _DISCLOSURE
+
+    return [
+        MessageDef(
+            C.NEW_ORDER_SINGLE, "NewOrderSingle",
+            required=((CL_ORD_ID, ORD_TYPE, SIDE, ORDER_QTY, TRANSACT_TIME)
+                      + parties + instrument_required + disclosure),
+            optional=(SECURITY_EXCHANGE, EXEC_INST, C.TEXT, TIME_IN_FORCE,
+                      PRICE, POSITION_EFFECT, ORDER_CAPACITY,
+                      ORDER_RESTRICTIONS, MAX_PRICE_LEVELS,
+                      SELF_MATCH_PREVENTION_ID, LOT_TYPE),
+            inbound=True),
+
+        MessageDef(
+            C.ORDER_CANCEL_REPLACE_REQUEST, "OrderCancelReplaceRequest",
+            required=((CL_ORD_ID, ORIG_CL_ORD_ID, ORD_TYPE, SIDE, ORDER_QTY,
+                       TRANSACT_TIME) + parties + instrument_required
+                      + disclosure),
+            optional=(SECURITY_EXCHANGE, ORDER_ID, EXEC_INST, C.TEXT,
+                      TIME_IN_FORCE, PRICE, POSITION_EFFECT, ORDER_CAPACITY,
+                      ORDER_RESTRICTIONS, MAX_PRICE_LEVELS),
+            inbound=True),
+
+        MessageDef(
+            C.ORDER_CANCEL_REQUEST, "OrderCancelRequest",
+            required=((CL_ORD_ID, ORIG_CL_ORD_ID, SIDE, TRANSACT_TIME)
+                      + parties + instrument_required),
+            optional=(SECURITY_EXCHANGE, ORDER_ID, C.TEXT),
+            inbound=True),
+
+        MessageDef(
+            ORDER_MASS_CANCEL_REQUEST, "OrderMassCancelRequest",
+            required=((CL_ORD_ID, MASS_CANCEL_REQUEST_TYPE, TRANSACT_TIME)
+                      + parties),
+            optional=_INSTRUMENT + (SIDE, MARKET_SEGMENT_ID),
+            inbound=True),
+
+        MessageDef(
+            C.EXECUTION_REPORT, "ExecutionReport",
+            optional=((CL_ORD_ID, ORIG_CL_ORD_ID, ORDER_ID, EXEC_ID,
+                       TRD_MATCH_ID, ORD_TYPE, TIME_IN_FORCE, SIDE, ORDER_QTY,
+                       PRICE, TRANSACT_TIME, ORDER_CAPACITY, ORDER_RESTRICTIONS,
+                       MAX_PRICE_LEVELS, SELF_MATCH_PREVENTION_ID,
+                       POSITION_EFFECT, ORD_STATUS, EXEC_TYPE, LAST_PX,
+                       LAST_QTY, CUM_QTY, LEAVES_QTY, MATCH_TYPE,
+                       ORDER_CATEGORY, AGGRESSOR_INDICATOR, LOT_TYPE,
+                       ORD_REJ_REASON, CXL_REJ_REASON, EXEC_RESTATEMENT_REASON,
+                       REJECT_TEXT, C.TEXT) + _PARTIES + _INSTRUMENT),
+            inbound=False),
+
+        MessageDef(
+            ORDER_MASS_CANCEL_REPORT, "OrderMassCancelReport",
+            optional=((CL_ORD_ID, MASS_ACTION_REPORT_ID,
+                       MASS_CANCEL_REQUEST_TYPE, MASS_CANCEL_RESPONSE,
+                       MASS_CANCEL_REJECT_REASON, TRANSACT_TIME, C.TEXT)
+                      + _PARTIES + _INSTRUMENT),
+            inbound=False),
+
+        MessageDef(
+            C.BUSINESS_MESSAGE_REJECT, "BusinessMessageReject",
+            optional=(C.REF_SEQ_NUM, C.TEXT, C.REF_MSG_TYPE, C.REF_TAG_ID,
+                      C.BUSINESS_REJECT_REF_ID, C.BUSINESS_REJECT_REASON),
+            inbound=False),
+    ]
+
+
 def build():
     """The complete HKEX dialect: FIXT.1.1 session layer plus business messages."""
     return build_session_dictionary(
         begin_string="FIXT.1.1",
         fields=session_extensions() + application_fields(),
         messages=session_messages() + application_messages(),
-        header=HEADER_TAGS)
+        header=HEADER_TAGS,
+        timestamp_decimals=TIMESTAMP_DECIMALS)
+
+
+def build_binary():
+    """The same dialect as the binary specification tables it.
+
+    A separate dictionary rather than a flag on the other one, because it is a
+    transcription of a separate published document: where the two disagree, each
+    session is validated against the table its own client was written from.
+
+    ``begin_string`` is nominal here -- the binary encoding carries no
+    BeginString -- but it still identifies the session, so it names the
+    encoding rather than claiming a FIX version the wire never states.
+    """
+    return build_session_dictionary(
+        begin_string=BINARY_BEGIN_STRING,
+        fields=session_extensions() + application_fields(),
+        messages=binary_session_messages() + binary_application_messages(),
+        header=BINARY_HEADER_TAGS,
+        timestamp_decimals=TIMESTAMP_DECIMALS)

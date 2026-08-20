@@ -30,6 +30,7 @@ Index: <https://www.hkex.com.hk> → Services → Trading → Securities → Inf
 | File | Used for |
 |---|---|
 | `HKEX_OCGC_FIX_Trading_Protocol_3.12.pdf` | the dialect in `venues/hkex/dictionary.py`; v3.12, 19 July 2023 |
+| `HKEX_OCGC_Binary_Trading_Protocol_3.2.pdf` | the second encoding: `binary/` and the layouts in `venues/hkex/binary.py`; v3.2, 19 July 2023, the same edition as the FIX one |
 | `HKEX_OCGC_Connectivity_Guide_3.0.pdf` | session establishment, IP registration |
 | Rules of the Exchange, **Second Schedule, Part A** | `venues/hkex/reference/spread_table.csv`. Transcribed verbatim, and it already incorporates the reductions that followed the June 2024 minimum-spread consultation (conclusions December 2024, Phase 1 effective 4 August 2025) |
 | Rules of the Exchange, quotation and nominal-price rules | the two price checks: 24 spreads behind the same-side best and 9 through the other's, plus the multiplicative 9-times rule |
@@ -60,6 +61,31 @@ where each requirement ended up.
 
 The POS and CAS auctions are implemented: `core/auction.py` finds the price and
 `venues/hkex/auctions.py` holds the reference price and the two-stage bands.
+
+### One protocol, two encodings
+
+HKEX publishes OCG-C twice — as tag=value FIX and as a fixed-width binary
+format — and a client is entitled to one of them. Both are implemented, which
+took a codec rather than a second gateway: `binary/` decodes a frame into the
+same `fix.Message` the venue already handles, so the session layer, the
+handlers, the books and the audit are shared. What the *documents* disagree
+about, and where each difference lives:
+
+| The binary specification says | Where |
+|---|---|
+| A frame is `STX`, a UInt16 length, the type, the sequence, PossDup/PossResend, a 12-byte Comp ID, a 32-byte field presence map, the body, and a CRC32C — all little-endian | `binary/message.py`, `binary/types.py` |
+| A field's position in the body comes from its bit in the presence map, and the numbering is per message type | `venues/hkex/binary.py` |
+| One Comp ID travels, the client's, in both directions | `binary/codec.py` |
+| There is no SendingTime, no BeginString and no ApplVerID | the header is what section 7.2 lists, nothing more |
+| Logon has no EncryptMethod and no HeartBtInt | `SessionConfig.requires_encrypt_method` / `requires_heart_bt_int` |
+| A Reject is replayed on a resend rather than gap-filled (section 5.6) | `binary/codec.py:GAP_FILLABLE` |
+| There is no OrderCancelReject: a refused cancel or amend is an Execution Report with ExecType `X` or `Y`, carrying totals 35=9 has no fields for | `handlers.py:_for_wire` |
+| `<Parties>` is four flat broker fields and `<DisclosureInstructionGrp>` a bitmap | the getters and setters in `venues/hkex/binary.py` |
+| A Cancel Request carries no OrderQty, and SecurityExchange is optional throughout | `dictionary.build_binary()` |
+
+Both editions document `TransactTime` to **microseconds**, which the shared
+timestamp validator did not accept until this venue's dialect began stating its
+own precision.
 
 Still genuinely unbuilt, and rejected rather than faked: the odd/special lot
 book, quotes (`35=S/Z/AI`), trade capture (`35=AE/AR`), drop copy, and the

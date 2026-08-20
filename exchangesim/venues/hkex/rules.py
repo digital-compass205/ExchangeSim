@@ -303,6 +303,35 @@ ASSUMPTIONS = [
      "alternative": "stop after the first price level, as the field asks",
      "source": "the specification says only that the value must be 1 if "
                "present, without describing the resulting behaviour"},
+
+    # -- the binary encoding, where it and the FIX one do not simply agree --
+
+    {"topic": "binary Gap Fill value",
+     "behaviour": "Y and N, as FIX spells GapFillFlag(123)",
+     "alternative": "1 and 0",
+     "source": "the value list for this field is a graphic the binary "
+               "specification's text layer does not carry. It is typed Byte, "
+               "an ASCII character, where every genuinely numeric flag in that "
+               "dictionary is a UInt8 -- so a letter is the reading the type "
+               "supports"},
+    {"topic": "binary Disclosure Instructions bit order",
+     "behaviour": "bit 0 (None) is the least significant bit of the 16-bit "
+                  "word, so a disclosure of None travels as the value 1",
+     "alternative": "bit 0 as the most significant bit, as the field presence "
+                    "map numbers its own bits",
+     "source": "the specification calls the field 'the Integer value of the 16 "
+               "bit representation', which is the ordinary reading of an "
+               "integer's bits; only the presence map states the other one"},
+    {"topic": "binary cancel reject for an unknown order",
+     "behaviour": "the Execution Report that refuses it carries no instrument "
+                  "and no side, and zero for both quantities",
+     "alternative": "echo the instrument and side out of the client's own "
+                    "request",
+     "source": "this encoding reports a refused cancel as an Execution Report, "
+               "whose required fields describe an order -- and an unknown "
+               "OrigClOrdID is precisely the case where there is no order to "
+               "describe. Echoing the request back would state as fact "
+               "something the venue has not confirmed"},
 ]
 
 

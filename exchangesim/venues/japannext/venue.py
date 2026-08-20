@@ -28,6 +28,7 @@ from ...core.market import Market
 from ...core.prices import PriceCodec
 from ...core.validation import StandardValidator
 from ...fix.acceptor import Acceptor, SessionManager
+from ...fix.codec import FixCodec
 from ...fix.session import SessionConfig
 from ..base import Venue
 from . import commands as venue_commands
@@ -318,8 +319,8 @@ class JapannextVenue(Venue):
                     allowed_sub_ids=markets),
                 self.application)
 
-        self.acceptor = Acceptor(self.reactor, self.manager,
-                                 fix.get("begin_string", "FIX.4.2"))
+        self.codecs = {"fix": FixCodec(fix.get("begin_string", "FIX.4.2"))}
+        self.acceptor = Acceptor(self.reactor, self.manager, self.codecs["fix"])
         self.acceptor.start(fix.get("host", "127.0.0.1"), fix.get("port", 9001))
 
     # -- trading state -----------------------------------------------------
