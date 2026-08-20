@@ -5,84 +5,98 @@
    Every colour in this file is one of the tokens below and there are no bare
    hex values further down, because a second palette is only a second block of
    token values -- a colour written inline would appear in one theme only.
-   Dark is the default: a browser that states no preference gets the board the
-   simulator has always had, and `prefers-color-scheme: light` swaps the
-   palette wholesale. */
+   Dark is the default: a browser that states no preference gets it, and
+   `prefers-color-scheme: light` swaps the palette wholesale.
+
+   **Every token that carries text clears 4.5:1 against every surface it can
+   land on** -- panel, page, the sunken rows and an input's well -- which is
+   WCAG AA for body text and the floor to hold when changing any value here.
+   The dimmest of them, --ink-faint, is the one to watch: it labels the stats,
+   the empty-table rows and the wire dump, all at 11px, and it sat at 2.8:1
+   until a board read as grey on grey on a dim monitor. The board is also read
+   on cheap panels at an angle, so the surfaces themselves are kept a step
+   apart (panel against page, and a border that can actually be seen) rather
+   than relying on the text alone to carry the structure. */
 
 :root {
   color-scheme: dark;
 
-  --bg: #12151b;
-  --panel: #191d26;
-  --panel-edge: #262c38;
-  --ink: #d8dde7;
-  --ink-dim: #8b93a3;
-  --ink-faint: #5b6373;
+  --bg: #090c12;
+  --panel: #1c222e;
+  --panel-edge: #414b60;
+  --ink: #e9edf4;
+  --ink-dim: #b0b9c9;
+  --ink-faint: #8b95a8;
 
   /* Japanese boards put asks (sell) on the left and bids (buy) on the right,
      and they colour by direction rather than by warm/cool: buying is red,
      selling is green. That is the reverse of the Western convention, so it is
-     stated here once rather than left to be inferred from two hex values. */
-  --ask: #4cae62;
-  --ask-bg: rgba(76, 174, 98, 0.16);
-  --bid: #e0736b;
-  --bid-bg: rgba(224, 115, 107, 0.14);
+     stated here once rather than left to be inferred from two hex values.
+     Each reads at better than 4.5:1 on its own wash as well as on the panel,
+     since a ladder cell is coloured text on a tint of the same hue. */
+  --ask: #5ec97a;
+  --ask-bg: rgba(94, 201, 122, 0.20);
+  --bid: #f38a80;
+  --bid-bg: rgba(243, 138, 128, 0.18);
 
-  --accent: #d9a441;
-  --ok: #6fbf73;
-  --down: #d2564b;
+  --accent: #e6b155;
+  --ok: #7ed184;
+  --down: #f0705f;
 
   /* An input's well, and the ink that reads on the accent as a button fill. */
-  --field: #0e1116;
+  --field: #080b10;
   --on-accent: #16181d;
 
   /* Rows that are not panel: the ladder's edge markers and the audit's gap
-     notice sit below the surface, zebra and hover sit just above it. */
-  --sunken: #14181f;
-  --zebra: rgba(255, 255, 255, 0.015);
-  --row-hover: rgba(255, 255, 255, 0.04);
+     notice sit below the surface, zebra and hover sit just above it. The two
+     washes are what separate one dense row from the next, so they are set to
+     be seen rather than merely sensed. */
+  --sunken: #101520;
+  --zebra: rgba(255, 255, 255, 0.045);
+  --row-hover: rgba(255, 255, 255, 0.085);
 
-  --accent-soft: rgba(217, 164, 65, 0.16);
-  --accent-faint: rgba(217, 164, 65, 0.12);
-  --flash: rgba(217, 164, 65, 0.35);
+  --accent-soft: rgba(230, 177, 85, 0.20);
+  --accent-faint: rgba(230, 177, 85, 0.14);
+  --flash: rgba(230, 177, 85, 0.40);
 
-  --error-bg: #3a1d1b;
-  --error-ink: #ffb4ac;
-  --error-edge: #5b2a26;
+  --error-bg: #48221e;
+  --error-ink: #ffc0b8;
+  --error-edge: #7a3a33;
 }
 
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
 
-    --bg: #eef0f4;
+    --bg: #eaedf2;
     --panel: #ffffff;
-    --panel-edge: #d5dae3;
-    --ink: #1a1e26;
-    --ink-dim: #5a6272;
-    --ink-faint: #868e9d;
+    --panel-edge: #c3cad6;
+    --ink: #161a21;
+    --ink-dim: #4e5666;
+    --ink-faint: #5f6878;
 
     /* The same convention, darkened until it carries on white: buying red,
-       selling green. The washes stay tints of those two. */
-    --ask: #157f3b;
-    --ask-bg: rgba(21, 127, 59, 0.12);
-    --bid: #c0392b;
-    --bid-bg: rgba(192, 57, 43, 0.10);
+       selling green. The washes stay tints of those two, and each colour is
+       dark enough to clear the floor sitting on its own wash. */
+    --ask: #12703a;
+    --ask-bg: rgba(18, 112, 58, 0.13);
+    --bid: #b32a1d;
+    --bid-bg: rgba(179, 42, 29, 0.11);
 
-    --accent: #9a6b12;
-    --ok: #1f7a34;
-    --down: #c0392b;
+    --accent: #8a5d0a;
+    --ok: #1a6c2e;
+    --down: #b32a1d;
 
     --field: #ffffff;
     --on-accent: #ffffff;
 
-    --sunken: #f1f3f7;
-    --zebra: rgba(0, 0, 0, 0.022);
-    --row-hover: rgba(0, 0, 0, 0.05);
+    --sunken: #eef1f6;
+    --zebra: rgba(0, 0, 0, 0.030);
+    --row-hover: rgba(0, 0, 0, 0.065);
 
-    --accent-soft: rgba(154, 107, 18, 0.16);
-    --accent-faint: rgba(154, 107, 18, 0.11);
-    --flash: rgba(154, 107, 18, 0.28);
+    --accent-soft: rgba(138, 93, 10, 0.18);
+    --accent-faint: rgba(138, 93, 10, 0.12);
+    --flash: rgba(138, 93, 10, 0.30);
 
     --error-bg: #fdecea;
     --error-ink: #8c1d13;
