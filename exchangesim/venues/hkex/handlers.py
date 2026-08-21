@@ -362,6 +362,64 @@ class HkexApplication(Application):
                 instructions.append(rules.EXEC_INST_TO_CORE[value])
         return tuple(instructions)
 
+    # -- inbound: party entitlements ---------------------------------------
+
+    def _on_entitlement_request(self, session, message):
+        """Section 7.10: what may this client's Broker IDs do?
+
+        One report per Broker ID, fragmented as the specification describes,
+        with LastFragment on the final one. A simulator grants Trade and
+        withholds Make Markets: quoting is not implemented here, and an
+        entitlement it would refuse to honour is worse than an honest No.
+        """
+        request_id = message.get(D.ENTITLEMENTS_REQUEST_ID)
+        brokers = self.venue.brokers_for(session)
+
+        if not brokers:
+            # Nothing was configured for this Comp ID. That is a real answer --
+            # the published RequestResult for it -- not an error.
+            report = self._entitlement_report(request_id)
+            report.set(D.REQUEST_RESULT, D.RequestResult.NO_DATA_FOUND)
+            report.set(D.TOT_NO_PARTY_LIST, 0)
+            report.set(D.LAST_FRAGMENT, C.YES)
+            session.send(report)
+            return None
+
+        for index, broker in enumerate(brokers):
+            report = self._entitlement_report(request_id)
+            report.set(D.REQUEST_RESULT, D.RequestResult.VALID)
+            report.set(D.TOT_NO_PARTY_LIST, len(brokers))
+            report.set(D.LAST_FRAGMENT,
+                       C.YES if index == len(brokers) - 1 else C.NO)
+            self._set_entitlements(report, broker)
+            session.send(report)
+        return None
+
+    def _entitlement_report(self, request_id):
+        report = Message.create(D.PARTY_ENTITLEMENT_REPORT)
+        report.set(D.ENTITLEMENTS_REPORT_ID, self.venue.entitlement_ids.next())
+        report.set_if(D.ENTITLEMENTS_REQUEST_ID, request_id)
+        return report
+
+    def _set_entitlements(self, report, broker):
+        """One broker and what it may do.
+
+        The <PartyEntitlementGrp> wrappers are set for the FIX encoding, which
+        nests the broker inside them; the binary encoding has no bit for either
+        count and simply does not carry them. Both read the same tags.
+        """
+        report.set(D.NO_PARTY_ENTITLEMENTS, 1)
+        report.set(D.NO_PARTY_DETAILS, 1)
+        report.set(D.PARTY_DETAIL_ID, broker)
+        report.set(D.PARTY_DETAIL_ID_SOURCE, D.PartyIDSource.PROPRIETARY)
+        report.set(D.PARTY_DETAIL_ROLE, D.PartyDetailRole.EXECUTING_FIRM)
+
+        report.set(D.NO_ENTITLEMENTS, 1)
+        report.append(D.ENTITLEMENT_TYPE, D.EntitlementType.TRADE)
+        report.append(D.ENTITLEMENT_INDICATOR, C.YES)
+        report.append(D.ENTITLEMENT_ID, "%s-%s" % (broker,
+                                                   D.EntitlementType.TRADE))
+
     # -- outbound ----------------------------------------------------------
 
     def _emit(self, session, events):
@@ -786,6 +844,7 @@ _HANDLERS = {
     C.ORDER_CANCEL_REQUEST: HkexApplication._on_cancel,
     C.ORDER_CANCEL_REPLACE_REQUEST: HkexApplication._on_replace,
     D.ORDER_MASS_CANCEL_REQUEST: HkexApplication._on_mass_cancel,
+    D.PARTY_ENTITLEMENT_REQUEST: HkexApplication._on_entitlement_request,
 }
 
 _RENDERERS = {

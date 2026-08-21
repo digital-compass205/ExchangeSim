@@ -19,10 +19,10 @@ from . import values as V
 
 
 class Field(object):
-    """One entry of a message's presence map."""
+    """One entry of a presence map: a value at a bit position."""
 
     __slots__ = ("bit", "name", "type", "tag", "converter", "getter", "setter",
-                 "redact")
+                 "redact", "repeating")
 
     def __init__(self, bit, name, type_, tag=None, converter=None, get=None,
                  put=None, redact=False):
@@ -36,29 +36,161 @@ class Field(object):
         self.setter = put
         #: True for a credential, which must not reach a log or the audit view.
         self.redact = redact
+        #: Set by :class:`Block` on the fields it owns: their tag repeats once
+        #: per entry, so they are appended rather than replaced.
+        self.repeating = False
         if tag is None and (get is None or put is None):
             raise ValueError(
                 "field '%s' needs either a tag or both a getter and a setter"
                 % name)
 
-    def read(self, message):
-        """The wire value of this field in ``message``, or None if absent."""
+    def read(self, message, index=0):
+        """This field's wire value in ``message``, or None if absent.
+
+        ``index`` selects the occurrence, which is what makes a repeating block
+        work: entry *n* of a block is the *n*th occurrence of each member tag,
+        exactly as the venue's gateway already reads ``<Parties>``.
+        """
         if self.getter is not None:
             return self.getter(message)
-        text = message.get(self.tag)
-        if text is None or text == "":
+        values = message.get_all(self.tag)
+        if index >= len(values) or values[index] == "":
             return None
-        return self.converter.to_wire(text)
+        return self.converter.to_wire(values[index])
 
-    def write(self, message, value):
+    def write(self, message, value, index=0):
         """Put a decoded wire value onto ``message``."""
         if self.setter is not None:
             self.setter(message, value)
+        elif self.repeating:
+            message.append(self.tag, self.converter.from_wire(value))
         else:
             message.set(self.tag, self.converter.from_wire(value))
 
+    def pack(self, message, index=0):
+        """The bytes for this field, or None when it is absent."""
+        value = self.read(message, index)
+        return None if value is None else self.type.pack(value)
+
+    def unpack(self, message, raw, offset, index=0):
+        """Read this field off ``raw`` onto ``message``, returning the offset."""
+        value, offset = self.type.unpack(raw, offset)
+        self.write(message, value, index)
+        return offset
+
     def __repr__(self):
         return "Field(%d, %s, %s)" % (self.bit, self.name, self.type)
+
+
+#: Width of a repeating block's own presence map. The message header carries a
+#: Bitmap Fixed Length (32); a block carries a Bitmap Variable Length (2).
+BLOCK_MAP_BYTES = 2
+
+
+class Block(object):
+    """A repeating block, section 6.2.2.
+
+    On the wire: a UInt16 count, then that many entries, each its own two-byte
+    presence map followed by whichever of its fields that map says are there. A
+    block may hold another block, which is how an entitlement carries its
+    attributes.
+
+    On the FIX side it is the ordinary group this codebase already uses -- a
+    NumInGroup tag and the member tags repeated once per entry, read
+    positionally. **That representation is flat**, so an outer block with more
+    than one entry, each carrying an inner block of its own, could not be read
+    back unambiguously; :meth:`pack` refuses to write one rather than emitting
+    something it cannot decode. Nothing this venue builds comes close -- an
+    entitlement report carries one broker per fragment -- and the alternative is
+    a group model through the whole codec for a case no venue here has.
+    """
+
+    __slots__ = ("bit", "name", "count_tag", "fields", "by_bit", "redact",
+                 "repeating", "count_type")
+
+    def __init__(self, bit, name, count_tag, fields):
+        self.bit = bit
+        self.name = name
+        #: The NumInGroup tag holding the entry count on the FIX side.
+        self.count_tag = count_tag
+        self.count_type = T.Unsigned(2)
+        self.fields = tuple(sorted(fields, key=lambda field: field.bit))
+        self.by_bit = dict((field.bit, field) for field in self.fields)
+        if len(self.by_bit) != len(self.fields):
+            raise ValueError("block '%s' reuses a bit position" % name)
+        self.redact = False
+        self.repeating = False
+        for field in self.fields:
+            field.repeating = True
+
+    @property
+    def blocks(self):
+        return [field for field in self.fields if isinstance(field, Block)]
+
+    def _ambiguous(self, message, count):
+        """True when this block's entries could not be told apart on read-back.
+
+        Only an outer block that has several entries *and* actually carries
+        inner ones is ambiguous: the inner entries would arrive as one flat run
+        of repeated tags with nothing to say which outer entry each belonged
+        to. A nested block that is merely *defined* and left empty is fine.
+        """
+        if count <= 1:
+            return False
+        return any(message.has(block.count_tag) for block in self.blocks)
+
+    def read_count(self, message, index=0):
+        values = message.get_all(self.count_tag)
+        if index >= len(values):
+            return None
+        try:
+            return int(values[index])
+        except ValueError:
+            return None
+
+    def pack(self, message, index=0):
+        count = self.read_count(message, index)
+        if count is None:
+            return None
+        if self._ambiguous(message, count):
+            raise ValueError(
+                "block '%s' has %d entries and holds a block of its own, which "
+                "the flat group representation cannot express" % (self.name, count))
+
+        chunks = [self.count_type.pack(count)]
+        for entry in range(count):
+            positions = []
+            body = []
+            for field in self.fields:
+                packed = field.pack(message, entry)
+                if packed is None:
+                    continue
+                positions.append(field.bit)
+                body.append(packed)
+            chunks.append(T.pack_presence(positions, BLOCK_MAP_BYTES))
+            chunks.extend(body)
+        return b"".join(chunks)
+
+    def unpack(self, message, raw, offset, index=0):
+        count, offset = self.count_type.unpack(raw, offset)
+        if self.repeating:
+            message.append(self.count_tag, str(count))
+        else:
+            message.set(self.count_tag, str(count))
+        for entry in range(count):
+            bits, offset = T.presence_bits(raw, offset, BLOCK_MAP_BYTES)
+            for bit in bits:
+                field = self.by_bit.get(bit)
+                if field is None:
+                    raise MalformedMessage(
+                        "%s has no field at bit position %d of its block"
+                        % (self.name, bit))
+                offset = field.unpack(message, raw, offset, entry)
+        return offset
+
+    def __repr__(self):
+        return "Block(%d, %s, %d entries)" % (self.bit, self.name,
+                                              len(self.fields))
 
 
 class Layout(object):
@@ -85,8 +217,7 @@ class Layout(object):
                 # frame that cannot be trusted applies: drop the connection.
                 raise MalformedMessage(
                     "%s has no field at bit position %d" % (self.name, bit))
-            value, offset = field.type.unpack(raw, offset)
-            field.write(message, value)
+            offset = field.unpack(message, raw, offset)
         end = len(raw) - framing.TRAILER_BYTES
         if offset != end:
             raise MalformedMessage(
@@ -99,11 +230,11 @@ class Layout(object):
         positions = []
         chunks = []
         for field in self.fields:
-            value = field.read(message)
-            if value is None:
+            packed = field.pack(message)
+            if packed is None:
                 continue
             positions.append(field.bit)
-            chunks.append(field.type.pack(value))
+            chunks.append(packed)
         return T.pack_presence(positions), b"".join(chunks)
 
     def __repr__(self):

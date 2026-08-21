@@ -59,9 +59,9 @@ def venue_config(markets=None, sessions=None, **extra):
             "sender_comp_id": SERVER,
             "sessions": sessions or [
                 {"target_comp_id": BROKER1, "markets": ["MAIN", "GEM"],
-                 "cancel_on_disconnect": True},
+                 "broker_ids": [BROKER1_ID], "cancel_on_disconnect": True},
                 {"target_comp_id": BROKER2, "markets": ["MAIN", "GEM"],
-                 "cancel_on_disconnect": False},
+                 "broker_ids": [BROKER2_ID], "cancel_on_disconnect": False},
             ],
         },
         "markets": markets or [
@@ -250,11 +250,14 @@ def binary_venue_config(**extra):
     return venue_config(
         sessions=[
             {"target_comp_id": BROKER1, "protocol": "fix",
-             "markets": ["MAIN", "GEM"], "cancel_on_disconnect": True},
+             "markets": ["MAIN", "GEM"], "broker_ids": [BROKER1_ID],
+             "cancel_on_disconnect": True},
             {"target_comp_id": BROKER2, "protocol": "fix",
-             "markets": ["MAIN", "GEM"], "cancel_on_disconnect": False},
+             "markets": ["MAIN", "GEM"], "broker_ids": [BROKER2_ID],
+             "cancel_on_disconnect": False},
             {"target_comp_id": BROKER3, "protocol": "binary",
-             "markets": ["MAIN", "GEM"], "cancel_on_disconnect": True},
+             "markets": ["MAIN", "GEM"], "broker_ids": [BROKER3_ID],
+             "cancel_on_disconnect": True},
         ],
         binary={"host": "127.0.0.1", "port": 0},
         **extra)

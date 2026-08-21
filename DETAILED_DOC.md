@@ -74,7 +74,7 @@ config/         one JSON file per venue instance, plus the web board's
 scenarios/      example scenarios; the CI suite
 deploy/         systemd unit and install script
 tools/          pdftext.py, a stdlib PDF text extractor for reading venue specs
-tests/          1,169 tests, unittest only
+tests/          1,190 tests, unittest only
 ```
 
 Three layers with a hard dependency rule — arrows point inwards only, and
@@ -126,7 +126,7 @@ entitles a client to one of them. Both are served here, and the second one is a
 
 ```
   BROKER1 (tag=value)          BROKER3 (binary)
-        |  9011                      |  9012
+        |  9012                      |  9011
    FixCodec                     BinaryCodec        <- the only place that
         \____________  ________/                     knows which is which
                      \/
@@ -160,6 +160,12 @@ What actually differs, beyond the bytes, is small and each piece has a home:
 * **Its required-field table is its own**: a Cancel Request has no OrderQty and
   SecurityExchange is optional throughout, so `dictionary.build_binary()` is a
   separate transcription rather than a flag on the FIX one.
+* **Repeating blocks**, which FIX spells as a positional group and binary as a
+  count followed by entries carrying their own two-byte presence maps
+  (`binary/layout.py:Block`). The Party Entitlement Report is the one message
+  that needs them, and it is also where the two encodings diverge structurally:
+  FIX nests the broker in `<PartyEntitlementGrp><PartyDetailGrp>`, binary
+  carries a flat `Broker ID` and hangs the entitlements off the message.
 
 ## Auctions
 
@@ -264,7 +270,7 @@ Japannext counterpart:
   "markets": [{"name": "MAIN"}, {"name": "GEM"}],
   "smp": [{"id": "SMP0001", "instruction": "CANCEL_AGGRESSIVE"}],
   "limits": {"price_band_spreads": 24},
-  "binary": {"host": "127.0.0.1", "port": 9012}
+  "binary": {"host": "127.0.0.1", "port": 9011}
 }
 ```
 
@@ -278,10 +284,14 @@ A session states which of the venue's two encodings it speaks, and connects to
 that encoding's port:
 
 ```json
-{"target_comp_id": "BROKER3", "protocol": "binary", "markets": ["MAIN", "GEM"]}
+{"target_comp_id": "BROKER3", "protocol": "binary", "broker_ids": ["1003"],
+ "markets": ["MAIN", "GEM"]}
 ```
 
-`protocol` defaults to `"fix"`, so an existing config is unchanged. The `binary`
+`protocol` defaults to `"fix"`, so an existing config is unchanged; the shipped
+file puts binary on 9011 and FIX on 9012, that being the encoding this venue is
+usually driven with. `broker_ids` are the Broker Numbers that Comp ID may submit
+under, which a Party Entitlement Request asks for. The `binary`
 listener starts only when a session asks for one — a venue does not open a port
 nobody has been given — and a Comp ID belongs to exactly one encoding: offered
 the wrong one, the venue refuses the connection with a Logout saying so.
@@ -472,7 +482,7 @@ invocation covers every simulator a CI job started:
 ```json
 {
   "begin_string": "FIXT.1.1",
-  "fix_port": 9011,
+  "fix_port": 9012,
   "control_port": 9102,
   "server_comp_id": "HKEXSIM",
   "logon_reset_flag": false,
@@ -480,7 +490,10 @@ invocation covers every simulator a CI job started:
 }
 ```
 
-`logon_fields` carries whatever the dialect adds to Logon.
+`protocol` names the encoding, per scenario or per session — `"binary"` puts a
+scripted client on the binary port, and the steps stay written in FIX tags
+either way, because that is what the codec turns them into. `logon_fields`
+carries whatever the dialect adds to Logon.
 `logon_reset_flag: false` is for a venue that refuses a client-initiated
 sequence reset, as HKEX does — the scenario restarts its own numbering and asks
 the venue to do the same with `session.reset`.
@@ -616,9 +629,9 @@ Price band tables, by contrast, are exact.
 CAS auctions. Deliberately not built, and rejected rather than faked: the
 odd/special lot book and its trade-request flow, quotes, trade capture, drop
 copy, and the Volatility Control Mechanism. Both published encodings of the
-protocol are served; in the binary one the Lookup service (message types 7 and
-8), on-behalf-of cancels (23, 24) and the entitlement and throttle queries
-(25–28) are likewise unbuilt, and a client sending one gets a Reject naming an
+protocol are served, and both answer a Party Entitlement Request (35=CU /
+type 27); in the binary one the Lookup service (message types 7 and 8),
+on-behalf-of cancels (23, 24) and the throttle queries (25, 26) are unbuilt, and a client sending one gets a Reject naming an
 invalid message type rather than a half-answer. Beyond that:
 
 - **auction periods have no timings.** They are driven by `state.set` and

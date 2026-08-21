@@ -155,7 +155,10 @@ class BinaryCodec(object):
             bits, offset = T.presence_bits(raw, framing.HEADER_BYTES)
             for bit in bits:
                 field = layout.by_bit.get(bit)
-                if field is None:
+                if field is None or getattr(field, "type", None) is None:
+                    # A repeating block, or a bit this layout does not define.
+                    # No credential lives inside a block, and walking past one
+                    # would need the whole decoder; stop and show the rest raw.
                     break
                 _value, end = field.type.unpack(raw, offset)
                 if field.redact:

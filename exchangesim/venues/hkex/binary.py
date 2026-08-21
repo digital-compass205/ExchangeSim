@@ -30,7 +30,7 @@ stays where it already was: in the handlers.
 
 from ...binary import types as T
 from ...binary import values as V
-from ...binary.layout import BinaryDictionary, Field, Layout
+from ...binary.layout import BinaryDictionary, Block, Field, Layout
 from ...fix import constants as C
 from . import dictionary as D
 
@@ -50,6 +50,7 @@ TRANSACT_TIME = T.AlphaFixed(25)
 EXCHANGE = T.AlphaFixed(5)
 SEGMENT = T.AlphaFixed(20)
 SMP_ID = T.AlphaFixed(10)
+ENTITLEMENT_ID = T.AlphaFixed(21)
 PASSWORD = T.AlphaFixed(450)
 FIELD_NAME = T.AlphaFixed(50)
 TEXT = T.AlphaVariable(50)
@@ -398,6 +399,63 @@ def _mass_cancel_report():
     ])
 
 
+# -- party entitlements, section 7.10 ----------------------------------------
+
+def _entitlement_request():
+    """Party Entitlement Request (27): one field, and a whole handshake."""
+    return Layout(27, "PartyEntitlementRequest", D.PARTY_ENTITLEMENT_REQUEST, [
+        Field(0, "EntitlementRequestID", IDENTIFIER, D.ENTITLEMENTS_REQUEST_ID),
+    ])
+
+
+def _entitlement_report():
+    """Party Entitlement Report (28), section 7.10.2.
+
+    The one message here with repeating blocks, and the reason the codec has
+    them. Note where the two encodings part company: FIX wraps the broker in
+    ``<PartyEntitlementGrp><PartyDetailGrp>``, while binary carries a flat
+    ``Broker ID`` at bit 5 and hangs the entitlements straight off the message.
+    The counts those FIX wrappers need have no bit here, so they simply do not
+    travel -- which is exactly what a per-encoding layout is for.
+    """
+    attributes = Block(2, "NoEntitlementAttributes", D.NO_ENTITLEMENT_ATTRIB, [
+        Field(0, "EntitlementAttributeType", U16, D.ENTITLEMENT_ATTRIB_TYPE,
+              V.NUMBER),
+        Field(1, "EntitlementAttributeDataType", U8,
+              D.ENTITLEMENT_ATTRIB_DATA_TYPE, V.NUMBER),
+        Field(2, "EntitlementAttributeValue", ENTITLEMENT_ID,
+              D.ENTITLEMENT_ATTRIB_VALUE),
+    ])
+
+    scopes = Block(4, "NoInstrumentScopes", D.NO_INSTRUMENT_SCOPES, [
+        Field(0, "InstrumentScopeOperator", U8, D.INSTRUMENT_SCOPE_OPERATOR,
+              V.NUMBER),
+        Field(1, "SecurityID", IDENTIFIER, D.INSTRUMENT_SCOPE_SECURITY_ID),
+        Field(2, "SecurityIDSource", U8,
+              D.INSTRUMENT_SCOPE_SECURITY_ID_SOURCE, V.NUMBER),
+        Field(3, "SecurityExchange", EXCHANGE,
+              D.INSTRUMENT_SCOPE_SECURITY_EXCHANGE),
+    ])
+
+    entitlements = Block(6, "NoEntitlements", D.NO_ENTITLEMENTS, [
+        Field(0, "EntitlementType", U8, D.ENTITLEMENT_TYPE, V.NUMBER),
+        Field(1, "EntitlementIndicator", U8, D.ENTITLEMENT_INDICATOR, V.FLAG),
+        attributes,
+        Field(3, "EntitlementID", ENTITLEMENT_ID, D.ENTITLEMENT_ID),
+        scopes,
+    ])
+
+    return Layout(28, "PartyEntitlementReport", D.PARTY_ENTITLEMENT_REPORT, [
+        Field(0, "EntitlementReportID", IDENTIFIER, D.ENTITLEMENTS_REPORT_ID),
+        Field(1, "EntitlementRequestID", IDENTIFIER, D.ENTITLEMENTS_REQUEST_ID),
+        Field(2, "RequestResult", U16, D.REQUEST_RESULT, V.NUMBER),
+        Field(3, "TotalNoPartyList", U16, D.TOT_NO_PARTY_LIST, V.NUMBER),
+        Field(4, "LastFragment", U8, D.LAST_FRAGMENT, V.FLAG),
+        Field(5, "BrokerID", BROKER_ID, D.PARTY_DETAIL_ID),
+        entitlements,
+    ])
+
+
 def build(dictionary):
     """Every layout of the dialect, resolvable from either encoding's type.
 
@@ -463,6 +521,8 @@ def build(dictionary):
         _mass_cancel(),
         _execution_report(),
         _mass_cancel_report(),
+        _entitlement_request(),
+        _entitlement_report(),
     ]
 
     binary_dictionary = BinaryDictionary(layouts)

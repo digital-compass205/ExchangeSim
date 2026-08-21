@@ -3,7 +3,7 @@
 
   "protocol": "binary",
   "begin_string": "FIXT.1.1",
-  "fix_port": 9012,
+  "fix_port": 9011,
   "control_port": 9102,
   "server_comp_id": "HKEXSIM",
   "logon_reset_flag": false,
@@ -11,7 +11,7 @@
 
   "sessions": {
     "broker": {"comp_id": "BROKER3"},
-    "fixbroker": {"comp_id": "BROKER1", "protocol": "fix", "port": 9011,
+    "fixbroker": {"comp_id": "BROKER1", "protocol": "fix", "port": 9012,
                   "logon_fields": {"789": "1", "1137": "9", "1400": "101",
                                    "1402": "c2ltdWxhdG9y"}}
   },
@@ -26,6 +26,21 @@
     {"comment": "The binary Logon carries no EncryptMethod and no HeartBtInt",
      "logon": "broker"},
     {"clear": "broker"},
+
+    {"comment": "The startup handshake: what may this client's brokers do?",
+     "send": "broker", "fields": {"35": "CU", "1770": "800102"}},
+    {"comment": "One report per Broker ID, the last carrying LastFragment,",
+     "expect": "broker",
+     "fields": {"35": "CV", "1770": "800102", "1511": "0", "1512": "1",
+                "893": "Y", "1691": "1003", "1773": "1", "1775": "0",
+                "1774": "Y"}},
+    {"comment": "and the same answer to a FIX client, in its own encoding",
+     "logon": "fixbroker"},
+    {"clear": "fixbroker"},
+    {"send": "fixbroker", "fields": {"35": "CU", "1770": "800103"}},
+    {"expect": "fixbroker",
+     "fields": {"35": "CV", "1770": "800103", "1691": "1001", "1772": "1",
+                "1671": "1", "1693": "1"}},
 
     {"comment": "A board-lot limit order. Parties and Disclosure are flat",
      "send": "broker",
@@ -44,9 +59,7 @@
      "expect_result": {"bid": "393.000", "bid_qty": 1000}},
 
     {"comment": "A FIX broker sells into it: one book, two encodings",
-     "logon": "fixbroker"},
-    {"clear": "fixbroker"},
-    {"send": "fixbroker",
+     "send": "fixbroker",
      "fields": {"35": "D", "11": "BIN-F1",
                 "453": "1", "448": "1001", "447": "D", "452": "1",
                 "48": "00700", "22": "8", "207": "XHKG",

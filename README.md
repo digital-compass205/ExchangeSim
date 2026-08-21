@@ -11,8 +11,8 @@ Two venues ship today:
 | Venue | Protocol | Port | Control port |
 |---|---|---|---|
 | **Japannext PTS** equities | FIX 4.2 | 9001 | 9101 |
-| **HKEX securities market** (SEHK) | OCG-C — FIX 5.0 SP2 over FIXT.1.1 | 9011 | 9102 |
-| | OCG-C — the same protocol, binary encoding | 9012 | |
+| **HKEX securities market** (SEHK) | OCG-C — binary encoding | 9011 | 9102 |
+| | OCG-C — the same protocol as FIX 5.0 SP2 over FIXT.1.1 | 9012 | |
 
 HKEX publishes OCG-C in two interchangeable encodings and this serves both, on
 one set of books: a binary client and a FIX client trade with each other.
@@ -205,8 +205,8 @@ The shipped configs define two sessions per venue, ready to use:
 | Venue | Host:port | SenderCompID (venue) | TargetCompID (you) |
 |---|---|---|---|
 | Japannext | `127.0.0.1:9001` | `JNXSIM` | `CLIENT1`, `CLIENT2` |
-| HKEX, FIX | `127.0.0.1:9011` | `HKEXSIM` | `BROKER1`, `BROKER2` |
-| HKEX, binary | `127.0.0.1:9012` | `HKEXSIM` | `BROKER3` |
+| HKEX, binary | `127.0.0.1:9011` | `HKEXSIM` | `BROKER3` |
+| HKEX, FIX | `127.0.0.1:9012` | `HKEXSIM` | `BROKER1`, `BROKER2` |
 
 **Japannext** is FIX 4.2 (`BeginString=FIX.4.2`). Logon needs
 `EncryptMethod(98)=0` and `HeartBtInt(108)`; `ResetSeqNumFlag(141)=Y` is
@@ -227,7 +227,7 @@ Every business message carries a `<Parties>` group and a
 
 **The HKEX binary encoding** is the same protocol on a different wire, so
 everything above about instruments, segments and groups still holds — what
-changes is how the bytes are laid out. Point a binary client at **9012** with a
+changes is how the bytes are laid out. Point a binary client at **9011** with a
 Comp ID registered for it (`BROKER3` as shipped), and note that the frame
 carries **one Comp ID, your own**: there is no Sender/Target pair, so a client
 that puts the venue's `HKEXSIM` there will not be recognised. Logon needs
@@ -238,6 +238,13 @@ with `Exec Type` `X` or `Y`, this encoding having no OrderCancelReject.
 A session belongs to one encoding: add `"protocol": "binary"` to its entry in
 the config's `fix.sessions`, and set the listener's port in the `binary` block.
 The binary port opens only when at least one session asks for it.
+
+**Before trading, a client may ask what it is entitled to.** A Party Entitlement
+Request — `35=CU` in FIX, message type 27 in binary — is answered with one
+report per Broker ID configured for that session in `broker_ids`, each granted
+Trade and not Make Markets, since quoting is not implemented. A session with no
+`broker_ids` is answered with `RequestResult=2`, no data found, rather than an
+invented broker.
 
 `CLIENT1`, `BROKER1` and `BROKER3` have **Cancel on Disconnect** switched on, so their
 resting orders are pulled when the socket closes; `CLIENT2` and `BROKER2` do

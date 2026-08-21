@@ -405,6 +405,109 @@ class BusinessMessageTest(unittest.TestCase):
             self.assertNotIn(65 - expected_bit, bits)
 
 
+class RepeatingBlockTest(unittest.TestCase):
+    """Section 6.2.2: a count, then an entry per count, each with its own map."""
+
+    def setUp(self):
+        self.codec, self.dictionary = build_codec()
+
+    def report(self, brokers=("1003",), entitlements=1):
+        report = Message.create(D.PARTY_ENTITLEMENT_REPORT)
+        report.set(C.MSG_SEQ_NUM, 5)
+        report.set(C.TARGET_COMP_ID, "BROKER3")
+        report.set(D.ENTITLEMENTS_REPORT_ID, "N000000001")
+        report.set(D.ENTITLEMENTS_REQUEST_ID, "800102")
+        report.set(D.REQUEST_RESULT, D.RequestResult.VALID)
+        report.set(D.TOT_NO_PARTY_LIST, len(brokers))
+        report.set(D.LAST_FRAGMENT, "Y")
+        report.set(D.PARTY_DETAIL_ID, brokers[0])
+        report.set(D.NO_ENTITLEMENTS, entitlements)
+        for index in range(entitlements):
+            report.append(D.ENTITLEMENT_TYPE,
+                          D.EntitlementType.TRADE if index == 0
+                          else D.EntitlementType.MAKE_MARKETS)
+            report.append(D.ENTITLEMENT_INDICATOR, "Y" if index == 0 else "N")
+            report.append(D.ENTITLEMENT_ID, "ENT%d" % index)
+        return report
+
+    def test_a_block_is_a_count_then_an_entry_per_count(self):
+        raw = self.codec.encode(self.report())
+        body = raw[framing.BODY_OFFSET:-framing.TRAILER_BYTES]
+        # Bits 0 to 5 are fixed width, so the block starts after them:
+        # two identifiers, two UInt16s, a UInt8 and the Broker ID.
+        block = body[21 + 21 + 2 + 2 + 1 + 12:]
+        self.assertEqual((block[0], block[1]), (1, 0))   # count, UInt16 LE
+        # Then the entry's own two-byte map: EntitlementType, Indicator and
+        # EntitlementID are bits 0, 1 and 3 -- 1101 0000.
+        self.assertEqual((block[2], block[3]), (0xD0, 0x00))
+
+    def test_a_block_round_trips_through_the_wire(self):
+        decoded = self.codec.decode(self.codec.encode(self.report()))
+        self.assertEqual(decoded.get(D.PARTY_DETAIL_ID), "1003")
+        self.assertEqual(decoded.get(D.NO_ENTITLEMENTS), "1")
+        self.assertEqual(decoded.get(D.ENTITLEMENT_TYPE),
+                         D.EntitlementType.TRADE)
+        self.assertEqual(decoded.get(D.ENTITLEMENT_INDICATOR), "Y")
+        self.assertEqual(decoded.get(D.ENTITLEMENT_ID), "ENT0")
+
+    def test_several_entries_keep_their_order_and_their_values(self):
+        decoded = self.codec.decode(self.codec.encode(self.report(entitlements=2)))
+        self.assertEqual(decoded.get(D.NO_ENTITLEMENTS), "2")
+        self.assertEqual(decoded.get_all(D.ENTITLEMENT_TYPE),
+                         [D.EntitlementType.TRADE,
+                          D.EntitlementType.MAKE_MARKETS])
+        self.assertEqual(decoded.get_all(D.ENTITLEMENT_INDICATOR), ["Y", "N"])
+        self.assertEqual(decoded.get_all(D.ENTITLEMENT_ID), ["ENT0", "ENT1"])
+
+    def test_an_absent_block_sets_no_bit(self):
+        report = self.report()
+        report.remove(D.NO_ENTITLEMENTS)
+        raw = self.codec.encode(report)
+        bits, _offset = T.presence_bits(raw, framing.HEADER_BYTES)
+        self.assertNotIn(6, bits)
+        self.assertIsNone(self.codec.decode(raw).get(D.NO_ENTITLEMENTS))
+
+    def test_an_empty_block_still_travels_as_a_zero_count(self):
+        report = self.report()
+        report.set(D.NO_ENTITLEMENTS, 0)
+        report.remove(D.ENTITLEMENT_TYPE)
+        report.remove(D.ENTITLEMENT_INDICATOR)
+        report.remove(D.ENTITLEMENT_ID)
+        decoded = self.codec.decode(self.codec.encode(report))
+        self.assertEqual(decoded.get(D.NO_ENTITLEMENTS), "0")
+
+    def test_a_nested_block_is_carried_inside_its_entry(self):
+        report = self.report()
+        report.set(D.NO_ENTITLEMENT_ATTRIB, 1)
+        report.append(D.ENTITLEMENT_ATTRIB_TYPE, "4000")
+        report.append(D.ENTITLEMENT_ATTRIB_DATA_TYPE, "7")
+        report.append(D.ENTITLEMENT_ATTRIB_VALUE, "500")
+        decoded = self.codec.decode(self.codec.encode(report))
+        self.assertEqual(decoded.get(D.NO_ENTITLEMENT_ATTRIB), "1")
+        self.assertEqual(decoded.get(D.ENTITLEMENT_ATTRIB_TYPE), "4000")
+        self.assertEqual(decoded.get(D.ENTITLEMENT_ATTRIB_VALUE), "500")
+
+    def test_what_the_flat_group_cannot_express_is_refused_not_guessed(self):
+        # Two outer entries each carrying their own inner block cannot be read
+        # back from repeated tags, so the encoder declines to write one.
+        report = self.report(entitlements=2)
+        report.set(D.NO_ENTITLEMENT_ATTRIB, 1)
+        report.append(D.ENTITLEMENT_ATTRIB_TYPE, "4000")
+        self.assertRaises(ValueError, self.codec.encode, report)
+
+    def test_a_request_asks_with_one_field(self):
+        request = Message.create(D.PARTY_ENTITLEMENT_REQUEST)
+        request.set(C.MSG_SEQ_NUM, 4)
+        request.set(C.TARGET_COMP_ID, "BROKER3")
+        request.set(D.ENTITLEMENTS_REQUEST_ID, "800102")
+        raw = self.codec.encode(request)
+        self.assertEqual(raw[3], 27)
+        decoded = self.codec.decode(raw)
+        self.assertEqual(decoded.msg_type, D.PARTY_ENTITLEMENT_REQUEST)
+        self.assertEqual(decoded.get(D.ENTITLEMENTS_REQUEST_ID), "800102")
+        self.assertIsNone(self.dictionary.validate(decoded))
+
+
 class UnknownInputTest(unittest.TestCase):
 
     def setUp(self):

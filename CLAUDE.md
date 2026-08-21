@@ -24,7 +24,7 @@ $PY -m unittest tests.test_matching.SelfTradePreventionTest.test_cancel_newest_c
 
 $PY -m exchangesim.runner.main --config config/japannext.json --check   # validate config only
 $PY -m exchangesim.runner.main --config config/japannext.json           # run a venue
-$PY -m exchangesim.runner.main --config config/hkex.json                # FIX 9011, binary 9012, control 9102
+$PY -m exchangesim.runner.main --config config/hkex.json                # binary 9011, FIX 9012, control 9102
 
 $PY -m exchangesim.web.main --config config/web.json    # web board on :9200 (its own process)
 
@@ -91,6 +91,7 @@ Five things here are load-bearing.
 - **`dictionary.build_binary()` is a separate transcription, not a flag.** The two published tables disagree about required fields -- a Cancel Request has no OrderQty, `SecurityExchange` is optional, Logon has no EncryptMethod or HeartBtInt -- and each session is validated against the document its client was written from.
 - **There is no OrderCancelReject in the binary encoding.** A refused cancel or amend is an Execution Report with `ExecType` `X`/`Y` carrying the order's identity and running totals, which 35=9 has no fields for. `_for_wire` rebuilds it in the gateway because those fields come from the *order*; a codec that reached for one would be a gateway.
 - **Bit positions are per message type.** `Price` is bit 9 of a New Order, 11 of an Amend and 12 of an Execution Report. Every Execution Report variant in section 7.6.7 shares one assignment, though, so there is one layout and which fields it fills stays in the handlers.
+- **A repeating block is a count, then an entry per count, each with its own two-byte presence map** (`layout.py:Block`, section 6.2.2). On the FIX side it is the ordinary positional group — a NumInGroup tag and repeated members — which is *flat*: an outer block of several entries each carrying an inner block could not be read back, so `Block.pack` refuses to write one rather than emitting bytes it cannot decode. Only the Party Entitlement Report needs blocks today.
 
 `Audit` entries carry the `protocol` that recorded them and are read back with `venue.wire_codec(...)`; a binary entry renders as a hex dump with credentials struck out, so the bytes line up with a client's own log.
 

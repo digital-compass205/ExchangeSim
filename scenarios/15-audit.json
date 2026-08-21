@@ -2,7 +2,7 @@
   "name": "Audit: the tape records both the wire and the control plane",
 
   "begin_string": "FIXT.1.1",
-  "fix_port": 9011,
+  "fix_port": 9012,
   "control_port": 9102,
   "server_comp_id": "HKEXSIM",
   "logon_reset_flag": false,

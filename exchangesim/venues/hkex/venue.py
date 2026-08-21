@@ -61,9 +61,11 @@ BEGIN_STRING = "FIXT.1.1"
 PROTOCOL_FIX = "fix"
 PROTOCOL_BINARY = "binary"
 
-#: Where the binary listener goes when a session asks for one and the config
-#: does not say. Adjacent to the FIX port, as the real venue keeps them apart.
-DEFAULT_BINARY_PORT = 9012
+#: The two listeners' default ports. Binary has the lower one because it is
+#: the encoding this venue is usually driven with; the real venue likewise
+#: keeps a port per encoding rather than sniffing one.
+DEFAULT_BINARY_PORT = 9011
+DEFAULT_FIX_PORT = 9012
 
 #: Which auction a trading phase belongs to. PRE_OPEN and OPENING_AUCTION are
 #: the two periods of one POS, so moving between them continues the session
@@ -111,12 +113,18 @@ class HkexVenue(Venue):
         self.exec_ids = IdGenerator("E", session_date, width=9)
         self.trade_ids = IdGenerator("M", session_date, width=9)
         self.mass_cancel_ids = IdGenerator("X", session_date, width=9)
+        self.entitlement_ids = IdGenerator("N", session_date, width=9)
         self.sequences = SequenceGenerator()
 
         self.instruments = {}
         #: symbol -> MarketSegmentID. The wire never carries it; see the module
         #: docstring.
         self.segments = {}
+        #: TargetCompID -> the Broker IDs that Comp ID may submit under, which
+        #: a Party Entitlement Request asks for. Held here rather than on
+        #: SessionConfig: which brokers sit behind a Comp ID is this venue's
+        #: business, not the session layer's.
+        self.session_brokers = {}
         #: SelfMatchPreventionID(2362) -> core StpMode, registered out of band
         #: exactly as HKEX registers it against the ID. See rules.ASSUMPTIONS.
         self.smp_instructions = {}
@@ -462,6 +470,14 @@ class HkexVenue(Venue):
                 binary_sessions += 1
                 self._build_binary_dialect(sender_comp_id)
 
+            brokers = entry.get("broker_ids") or []
+            if not isinstance(brokers, list) or not all(
+                    isinstance(broker, str) for broker in brokers):
+                raise ConfigError(
+                    "session '%s': 'broker_ids' must be a list of strings"
+                    % target)
+            self.session_brokers[target] = brokers
+
             segments = entry.get("markets") or sorted(self.markets)
             unknown = [name for name in segments if name not in self.markets]
             if unknown:
@@ -496,7 +512,8 @@ class HkexVenue(Venue):
 
         self.acceptor = Acceptor(self.reactor, self.manager,
                                  self.codecs[PROTOCOL_FIX], self.dictionary)
-        self.acceptor.start(fix.get("host", "127.0.0.1"), fix.get("port", 9011))
+        self.acceptor.start(fix.get("host", "127.0.0.1"),
+                            fix.get("port", DEFAULT_FIX_PORT))
 
         if binary_sessions:
             binary_config = self.config.section("binary")
@@ -517,6 +534,15 @@ class HkexVenue(Venue):
         self.binary_layouts = binary_layouts.build(self.binary_dictionary)
         self.codecs[PROTOCOL_BINARY] = BinaryCodec(self.binary_layouts,
                                                    sender_comp_id)
+
+    def brokers_for(self, session):
+        """The Broker IDs a session may submit under, from its config.
+
+        Empty when the config does not say -- a simulator cannot invent an
+        Exchange Participant's broker numbers, and the entitlement report says
+        so plainly rather than making one up.
+        """
+        return list(self.session_brokers.get(session.target_comp_id, ()))
 
     def dictionary_for(self, protocol=None):
         """The dialect a recorded message should be read against."""

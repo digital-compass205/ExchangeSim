@@ -12,6 +12,7 @@ from exchangesim.audit import DIRECTION_IN
 from exchangesim.binary import message as framing
 from exchangesim.binary import types as T
 from exchangesim.fix import constants as C
+from exchangesim.fix.message import Message
 from exchangesim.venues.hkex import dictionary as D
 
 from .hkexsupport import (
@@ -275,6 +276,90 @@ class CrossEncodingTest(unittest.TestCase):
         # PartyRole 17 of the FIX one; this venue populates neither, so the two
         # encodings stay level with each other.
         self.assertIsNone(party(fill, D.PartyRole.CONTRA_FIRM))
+
+
+class EntitlementTest(unittest.TestCase):
+    """Section 7.10, the handshake a gateway does before it trades."""
+
+    def setUp(self):
+        self.harness = VenueHarness(binary_venue_config())
+        self.addCleanup(self.harness.close)
+
+    def request(self, client, request_id="800102"):
+        message = Message.create(D.PARTY_ENTITLEMENT_REQUEST)
+        message.set(D.ENTITLEMENTS_REQUEST_ID, request_id)
+        client.send(message)
+        return client.received()
+
+    def test_a_binary_client_is_told_what_its_brokers_may_do(self):
+        client = self.harness.client(BROKER3)
+        [report] = self.request(client)
+
+        self.assertEqual(report.msg_type, D.PARTY_ENTITLEMENT_REPORT)
+        self.assertEqual(report.get(D.ENTITLEMENTS_REQUEST_ID), "800102")
+        self.assertEqual(report.get(D.REQUEST_RESULT), D.RequestResult.VALID)
+        self.assertEqual(report.get(D.TOT_NO_PARTY_LIST), "1")
+        self.assertEqual(report.get(D.LAST_FRAGMENT), "Y")
+        self.assertEqual(report.get(D.PARTY_DETAIL_ID), "1003")
+        # Trade, yes; make markets is not offered at all, quoting being unbuilt.
+        self.assertEqual(report.get(D.NO_ENTITLEMENTS), "1")
+        self.assertEqual(report.get(D.ENTITLEMENT_TYPE),
+                         D.EntitlementType.TRADE)
+        self.assertEqual(report.get(D.ENTITLEMENT_INDICATOR), "Y")
+        self.assertTrue(report.get(D.ENTITLEMENT_ID))
+
+    def test_a_fix_client_gets_the_same_answer_in_its_own_encoding(self):
+        client = self.harness.client(BROKER1)
+        [report] = self.request(client, request_id="800103")
+        self.assertEqual(report.msg_type, D.PARTY_ENTITLEMENT_REPORT)
+        self.assertEqual(report.get(D.PARTY_DETAIL_ID), "1001")
+        # The wrappers the FIX encoding nests the broker in, which the binary
+        # encoding has no bit for and does not carry.
+        self.assertEqual(report.get(D.NO_PARTY_ENTITLEMENTS), "1")
+        self.assertEqual(report.get(D.NO_PARTY_DETAILS), "1")
+        self.assertEqual(report.get(D.PARTY_DETAIL_ROLE),
+                         D.PartyDetailRole.EXECUTING_FIRM)
+
+    def test_one_fragment_per_broker_with_the_last_one_marked(self):
+        config = binary_venue_config()
+        for entry in config.get("fix.sessions"):
+            if entry["target_comp_id"] == BROKER3:
+                entry["broker_ids"] = ["1003", "1004", "1005"]
+        harness = VenueHarness(config)
+        self.addCleanup(harness.close)
+
+        client = harness.client(BROKER3)
+        reports = self.request(client)
+        self.assertEqual([r.get(D.PARTY_DETAIL_ID) for r in reports],
+                         ["1003", "1004", "1005"])
+        self.assertEqual([r.get(D.LAST_FRAGMENT) for r in reports],
+                         ["N", "N", "Y"])
+        self.assertEqual(set(r.get(D.TOT_NO_PARTY_LIST) for r in reports),
+                         set(["3"]))
+
+    def test_a_session_with_no_brokers_configured_says_so(self):
+        config = binary_venue_config()
+        for entry in config.get("fix.sessions"):
+            if entry["target_comp_id"] == BROKER3:
+                entry["broker_ids"] = []
+        harness = VenueHarness(config)
+        self.addCleanup(harness.close)
+
+        client = harness.client(BROKER3)
+        [report] = self.request(client)
+        self.assertEqual(report.get(D.REQUEST_RESULT),
+                         D.RequestResult.NO_DATA_FOUND)
+        self.assertEqual(report.get(D.TOT_NO_PARTY_LIST), "0")
+        self.assertEqual(report.get(D.LAST_FRAGMENT), "Y")
+        self.assertIsNone(report.get(D.PARTY_DETAIL_ID))
+
+    def test_a_request_without_its_identifier_is_rejected(self):
+        client = self.harness.client(BROKER3)
+        client.send(Message.create(D.PARTY_ENTITLEMENT_REQUEST))
+        [reject] = client.received()
+        self.assertEqual(reject.msg_type, C.REJECT)
+        self.assertEqual(reject.get(C.SESSION_REJECT_REASON),
+                         str(C.SessionRejectReason.REQUIRED_TAG_MISSING))
 
 
 class BinaryAuditTest(unittest.TestCase):

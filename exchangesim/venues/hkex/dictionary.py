@@ -36,6 +36,8 @@ T = C.FieldType
 
 ORDER_MASS_CANCEL_REQUEST = "q"
 ORDER_MASS_CANCEL_REPORT = "r"
+PARTY_ENTITLEMENT_REQUEST = "CU"
+PARTY_ENTITLEMENT_REPORT = "CV"
 
 #: Fractional places OCG-C timestamps carry: microseconds, not milliseconds.
 TIMESTAMP_DECIMALS = 6
@@ -89,6 +91,37 @@ NO_DISCLOSURE_INSTRUCTIONS = 1812
 DISCLOSURE_TYPE = 1813
 DISCLOSURE_INSTRUCTION = 1814
 SELF_MATCH_PREVENTION_ID = 2362
+
+# -- party entitlements, section 7.10 ----------------------------------------
+#
+# The two encodings arrange these differently -- FIX wraps the broker in
+# <PartyEntitlementGrp><PartyDetailGrp>, binary carries it as a flat Broker ID
+# and hangs the entitlements straight off it -- but they are the same fields,
+# so the tags are the FIX ones in both.
+
+LAST_FRAGMENT = 893
+REQUEST_RESULT = 1511
+TOT_NO_PARTY_LIST = 1512
+NO_PARTY_DETAILS = 1671
+PARTY_DETAIL_ID = 1691
+PARTY_DETAIL_ID_SOURCE = 1692
+PARTY_DETAIL_ROLE = 1693
+ENTITLEMENTS_REQUEST_ID = 1770
+ENTITLEMENTS_REPORT_ID = 1771
+NO_PARTY_ENTITLEMENTS = 1772
+NO_ENTITLEMENTS = 1773
+ENTITLEMENT_INDICATOR = 1774
+ENTITLEMENT_TYPE = 1775
+ENTITLEMENT_ID = 1776
+NO_ENTITLEMENT_ATTRIB = 1777
+ENTITLEMENT_ATTRIB_TYPE = 1778
+ENTITLEMENT_ATTRIB_DATA_TYPE = 1779
+ENTITLEMENT_ATTRIB_VALUE = 1780
+NO_INSTRUMENT_SCOPES = 1656
+INSTRUMENT_SCOPE_OPERATOR = 1535
+INSTRUMENT_SCOPE_SECURITY_ID = 1538
+INSTRUMENT_SCOPE_SECURITY_ID_SOURCE = 1539
+INSTRUMENT_SCOPE_SECURITY_EXCHANGE = 1616
 
 
 # -- enumerations, exactly as the specification lists them -------------------
@@ -254,6 +287,33 @@ class MassCancelResponse(object):
 class MassCancelRejectReason(object):
     INVALID_MARKET_SEGMENT = 8
     OTHER = 99
+
+
+class RequestResult(object):
+    """``RequestResult(1511)`` on a Party Entitlement Report."""
+
+    VALID = "0"
+    INVALID_OR_UNSUPPORTED = "1"
+    NO_DATA_FOUND = "2"
+    NOT_AUTHORIZED = "3"
+    TEMPORARILY_UNAVAILABLE = "4"
+    NOT_SUPPORTED = "5"
+    OTHER = "99"
+
+
+class EntitlementType(object):
+    """``EntitlementType(1775)``. A simulator grants the first and not the
+    second: market making brings quote obligations, and quotes are not built."""
+
+    TRADE = "0"
+    MAKE_MARKETS = "1"
+
+
+class PartyDetailRole(object):
+    """``PartyDetailRole(1693)`` -- the roles an entitlement report names."""
+
+    EXECUTING_FIRM = "1"
+    LIQUIDITY_PROVIDER = "35"
 
 
 class SecurityIDSource(object):
@@ -452,6 +512,46 @@ def application_fields():
                  max_length=20),
         FieldDef(C.BUSINESS_REJECT_REASON, "BusinessRejectReason", T.INT,
                  labels=enum_labels(C.BusinessRejectReason)),
+
+        # -- party entitlements, section 7.10 --
+        FieldDef(ENTITLEMENTS_REQUEST_ID, "EntitlementsRequestID", T.STRING,
+                 max_length=20),
+        FieldDef(ENTITLEMENTS_REPORT_ID, "EntitlementsReportID", T.STRING,
+                 max_length=20),
+        FieldDef(REQUEST_RESULT, "RequestResult", T.INT,
+                 labels=enum_labels(RequestResult)),
+        FieldDef(TOT_NO_PARTY_LIST, "TotNoPartyList", T.INT),
+        FieldDef(LAST_FRAGMENT, "LastFragment", T.BOOLEAN),
+        FieldDef(NO_PARTY_ENTITLEMENTS, "NoPartyEntitlements", T.INT),
+        FieldDef(NO_PARTY_DETAILS, "NoPartyDetails", T.INT),
+        FieldDef(PARTY_DETAIL_ID, "PartyDetailID", T.STRING, max_length=11),
+        FieldDef(PARTY_DETAIL_ID_SOURCE, "PartyDetailIDSource", T.CHAR,
+                 values=(PartyIDSource.PROPRIETARY,),
+                 labels=enum_labels(PartyIDSource)),
+        FieldDef(PARTY_DETAIL_ROLE, "PartyDetailRole", T.INT,
+                 values=(PartyDetailRole.EXECUTING_FIRM,
+                         PartyDetailRole.LIQUIDITY_PROVIDER),
+                 labels=enum_labels(PartyDetailRole)),
+        FieldDef(NO_ENTITLEMENTS, "NoEntitlements", T.INT),
+        FieldDef(ENTITLEMENT_INDICATOR, "EntitlementIndicator", T.BOOLEAN),
+        FieldDef(ENTITLEMENT_TYPE, "EntitlementType", T.INT,
+                 values=(EntitlementType.TRADE, EntitlementType.MAKE_MARKETS),
+                 labels=enum_labels(EntitlementType)),
+        FieldDef(ENTITLEMENT_ID, "EntitlementID", T.STRING, max_length=20),
+        FieldDef(NO_ENTITLEMENT_ATTRIB, "NoEntitlementAttrib", T.INT),
+        FieldDef(ENTITLEMENT_ATTRIB_TYPE, "EntitlementAttribType", T.INT),
+        FieldDef(ENTITLEMENT_ATTRIB_DATA_TYPE, "EntitlementAttribDataType",
+                 T.INT),
+        FieldDef(ENTITLEMENT_ATTRIB_VALUE, "EntitlementAttribValue", T.STRING,
+                 max_length=20),
+        FieldDef(NO_INSTRUMENT_SCOPES, "NoInstrumentScopes", T.INT),
+        FieldDef(INSTRUMENT_SCOPE_OPERATOR, "InstrumentScopeOperator", T.INT),
+        FieldDef(INSTRUMENT_SCOPE_SECURITY_ID, "InstrumentScopeSecurityID",
+                 T.STRING, max_length=12),
+        FieldDef(INSTRUMENT_SCOPE_SECURITY_ID_SOURCE,
+                 "InstrumentScopeSecurityIDSource", T.STRING, max_length=2),
+        FieldDef(INSTRUMENT_SCOPE_SECURITY_EXCHANGE,
+                 "InstrumentScopeSecurityExchange", T.STRING, max_length=8),
     ]
 
 
@@ -464,6 +564,43 @@ _INSTRUMENT = (SECURITY_ID, SECURITY_ID_SOURCE, SECURITY_EXCHANGE)
 #: The <DisclosureInstructionGrp> block.
 _DISCLOSURE = (NO_DISCLOSURE_INSTRUCTIONS, DISCLOSURE_TYPE,
                DISCLOSURE_INSTRUCTION)
+
+
+#: The <PartyEntitlementGrp> and everything under it. One tuple, because both
+#: dialects accept exactly these tags on a report -- what differs is how each
+#: encoding lays them out, which is the codec's business, not the dictionary's.
+_ENTITLEMENT_GROUPS = (
+    NO_PARTY_ENTITLEMENTS, NO_PARTY_DETAILS, PARTY_DETAIL_ID,
+    PARTY_DETAIL_ID_SOURCE, PARTY_DETAIL_ROLE, NO_ENTITLEMENTS,
+    ENTITLEMENT_INDICATOR, ENTITLEMENT_TYPE, ENTITLEMENT_ID,
+    NO_ENTITLEMENT_ATTRIB, ENTITLEMENT_ATTRIB_TYPE,
+    ENTITLEMENT_ATTRIB_DATA_TYPE, ENTITLEMENT_ATTRIB_VALUE,
+    NO_INSTRUMENT_SCOPES, INSTRUMENT_SCOPE_OPERATOR,
+    INSTRUMENT_SCOPE_SECURITY_ID, INSTRUMENT_SCOPE_SECURITY_ID_SOURCE,
+    INSTRUMENT_SCOPE_SECURITY_EXCHANGE,
+)
+
+
+def entitlement_messages():
+    """Party Entitlement Request and Report, section 7.10.
+
+    A client asks what its Broker IDs may do, and the venue answers one report
+    per Broker ID, the last carrying LastFragment. Both encodings define both
+    messages, so this pair is shared.
+    """
+    return [
+        MessageDef(
+            PARTY_ENTITLEMENT_REQUEST, "PartyEntitlementRequest",
+            required=(ENTITLEMENTS_REQUEST_ID,),
+            inbound=True),
+
+        MessageDef(
+            PARTY_ENTITLEMENT_REPORT, "PartyEntitlementReport",
+            optional=((ENTITLEMENTS_REPORT_ID, ENTITLEMENTS_REQUEST_ID,
+                       REQUEST_RESULT, TOT_NO_PARTY_LIST, LAST_FRAGMENT)
+                      + _ENTITLEMENT_GROUPS),
+            inbound=False),
+    ]
 
 
 def session_messages():
@@ -672,7 +809,8 @@ def build():
     return build_session_dictionary(
         begin_string="FIXT.1.1",
         fields=session_extensions() + application_fields(),
-        messages=session_messages() + application_messages(),
+        messages=(session_messages() + application_messages()
+                  + entitlement_messages()),
         header=HEADER_TAGS,
         timestamp_decimals=TIMESTAMP_DECIMALS)
 
@@ -691,6 +829,7 @@ def build_binary():
     return build_session_dictionary(
         begin_string=BINARY_BEGIN_STRING,
         fields=session_extensions() + application_fields(),
-        messages=binary_session_messages() + binary_application_messages(),
+        messages=(binary_session_messages() + binary_application_messages()
+                  + entitlement_messages()),
         header=BINARY_HEADER_TAGS,
         timestamp_decimals=TIMESTAMP_DECIMALS)

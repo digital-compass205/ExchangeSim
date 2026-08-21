@@ -19,7 +19,7 @@
 
   "fix": {
     "host": "127.0.0.1",
-    "port": 9011,
+    "port": 9012,
     "begin_string": "FIXT.1.1",
     "sender_comp_id": "HKEXSIM",
     "store": "../var/hkex/fix",
@@ -27,6 +27,7 @@
     "sessions": [
       {
         "target_comp_id": "BROKER1",
+        "broker_ids": ["1001"],
         "protocol": "fix",
         "heartbeat_interval": 20,
         "markets": ["MAIN", "GEM"],
@@ -34,6 +35,7 @@
       },
       {
         "target_comp_id": "BROKER2",
+        "broker_ids": ["1002"],
         "protocol": "fix",
         "heartbeat_interval": 20,
         "markets": ["MAIN", "GEM"],
@@ -41,6 +43,7 @@
       },
       {
         "target_comp_id": "BROKER3",
+        "broker_ids": ["1003"],
         "protocol": "binary",
         "heartbeat_interval": 20,
         "markets": ["MAIN", "GEM"],
@@ -51,7 +54,7 @@
 
   "binary": {
     "host": "127.0.0.1",
-    "port": 9012
+    "port": 9011
   },
 
   "markets": [
@@ -95,6 +98,12 @@
     "Auctions run in the PRE_OPEN/OPENING_AUCTION (POS) and CLOSING_AUCTION",
     "(CAS) phases. There are no timings: 'state.set' opens the session,",
     "'auction.lock' ends the input period and 'state.set' uncrosses.",
+    "",
+    "'broker_ids' are the Broker Numbers a Comp ID may submit under. A Party",
+    "Entitlement Request (CU / binary 27) is answered with one report per",
+    "Broker ID listed here, each entitled to Trade and not to Make Markets --",
+    "quoting is not implemented. A session with none configured is answered",
+    "with RequestResult 2, no data found.",
     "",
     "'smp' pre-registers SelfMatchPreventionID(2362) instructions, which the",
     "real exchange holds out of band. Add more at runtime with the",
