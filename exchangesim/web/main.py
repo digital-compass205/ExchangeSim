@@ -13,6 +13,7 @@ import sys
 
 from ..core.clock import RealClock
 from ..core.config import Config, ConfigError
+from ..core.logutil import DEFAULT_BACKUPS, DEFAULT_MAX_BYTES
 from ..core.logutil import configure as configure_logging
 from ..core.reactor import Reactor
 from .app import WebApp
@@ -33,6 +34,10 @@ def build_parser():
                         help="override http.port from the config")
     parser.add_argument("--log-level", default=None,
                         help="override log.level from the config")
+    parser.add_argument("--log-file", default=None,
+                        help="override log.file from the config")
+    parser.add_argument("--no-console", action="store_true",
+                        help="log only to the file, not to stderr")
     parser.add_argument("--check", action="store_true",
                         help="load and validate the config, then exit")
     return parser
@@ -83,7 +88,10 @@ def main(argv=None):
 
     configure_logging(
         opts.log_level or config.get("log.level", "INFO"),
-        config.resolve_path("log.file"))
+        opts.log_file or config.resolve_path("log.file"),
+        max_bytes=config.get("log.max_bytes", DEFAULT_MAX_BYTES),
+        backups=config.get("log.backups", DEFAULT_BACKUPS),
+        console=not opts.no_console)
 
     reactor = Reactor(RealClock())
     try:
@@ -127,7 +135,7 @@ def _install_signal_handlers(reactor):
         log.info("received signal %d, shutting down", signum)
         reactor.stop()
 
-    for name in ("SIGINT", "SIGTERM"):
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
         sig = getattr(signal, name, None)
         if sig is not None:
             try:

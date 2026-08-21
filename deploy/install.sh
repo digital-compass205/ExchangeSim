@@ -35,8 +35,9 @@ echo "installing from $SOURCE to $TARGET (python $VERSION)"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || \
     useradd --system --home-dir "$TARGET" --shell /sbin/nologin "$SERVICE_USER"
 
-mkdir -p "$TARGET" "$TARGET/var" "$TARGET/config"
+mkdir -p "$TARGET" "$TARGET/var" "$TARGET/var/log" "$TARGET/var/run" "$TARGET/config"
 cp -r "$SOURCE/exchangesim" "$TARGET/"
+cp -r "$SOURCE/bin" "$TARGET/"
 cp -r "$SOURCE/scenarios" "$TARGET/" 2>/dev/null || true
 cp -r "$SOURCE/tools" "$TARGET/" 2>/dev/null || true
 cp "$SOURCE/README.md" "$SOURCE/DETAILED_DOC.md" "$TARGET/" 2>/dev/null || true
@@ -52,8 +53,12 @@ for config in "$SOURCE"/config/*.json; do
     fi
 done
 
+chmod +x "$TARGET/bin/exchangesim"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$TARGET"
 chmod 750 "$TARGET" "$TARGET/var"
+
+# One command on the path, for the operator who is not going through systemd.
+ln -sf "$TARGET/bin/exchangesim" /usr/local/bin/exchangesim
 
 install -m 0644 "$SOURCE/deploy/exsimd@.service" \
         /etc/systemd/system/exsimd@.service
@@ -63,7 +68,16 @@ cat <<EOF
 
 installed to $TARGET
 
-Start a venue:
+Run it, either way -- pick one, not both:
+
+  As one command, logging to $TARGET/var/log. Run it as $SERVICE_USER,
+  which is what owns that directory:
+    sudo -u $SERVICE_USER exchangesim start
+    exchangesim status
+    exchangesim logs hkex -f
+    exchangesim stop
+
+  Or under systemd, one unit per venue, logging to the journal:
     systemctl enable --now exsimd@japannext
     systemctl status exsimd@japannext
 
@@ -73,6 +87,7 @@ Drive it:
 Run the scenario suite:
     $PYTHON -m exchangesim.scenario.runner "$TARGET/scenarios/*.json"
 
-Each additional exchange is another config file in $TARGET/config and another
-"systemctl enable --now exsimd@<name>"; give it its own FIX and control ports.
+Each additional exchange is another config file in $TARGET/config plus an entry
+in config/services.json (or another "systemctl enable --now exsimd@<name>");
+give it its own FIX and control ports.
 EOF

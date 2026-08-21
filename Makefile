@@ -6,17 +6,25 @@
 PYTHON ?= /usr/libexec/platform-python
 CONFIG ?= config/japannext.json
 WEB_CONFIG ?= config/web.json
+SERVICES ?= config/services.json
 SCENARIOS ?= scenarios/*.json
 
-# Every venue the scenario suite expects to be running. Each scenario names the
-# ports it needs, so one `make scenarios` covers them all.
-VENUES ?= config/japannext.json config/hkex.json
+# What `make smoke` needs up: the venues the scenarios name, but not the web
+# board, which is a client of them and takes no part.
+SMOKE_SERVICES ?= japannext hkex
 
-.PHONY: help test run check web scenarios smoke clean
+CTL = $(PYTHON) -m exchangesim.ctl.main --config $(SERVICES)
+
+.PHONY: help test run check web start stop restart status logs scenarios smoke clean
 
 help:
 	@echo "make test        run the unit and integration suite"
-	@echo "make check       validate every venue config without starting anything"
+	@echo "make check       validate every service's config without starting it"
+	@echo "make start       start every service in $(SERVICES)"
+	@echo "make status      show what is running, and where"
+	@echo "make logs        tail every service's log (make logs SERVICE=hkex)"
+	@echo "make stop        stop every service"
+	@echo "make restart     stop then start"
 	@echo "make run         start $(CONFIG) in the foreground"
 	@echo "make web         start the web board for the venues in $(WEB_CONFIG)"
 	@echo "make scenarios   run the scenario suite against running simulators"
@@ -24,15 +32,32 @@ help:
 	@echo "make clean       remove bytecode and runtime state"
 	@echo ""
 	@echo "PYTHON=$(PYTHON)"
-	@echo "VENUES=$(VENUES)"
+	@echo "SERVICES=$(SERVICES)"
 
 test:
 	$(PYTHON) -m unittest discover -s tests -t .
 
 check:
-	@for config in $(VENUES); do \
-	    $(PYTHON) -m exchangesim.runner.main --config $$config --check || exit 1; \
-	done
+	$(CTL) check
+
+# -- the whole simulator, in the background, logging to var/log ---------------
+
+start:
+	$(CTL) start $(SERVICE)
+
+stop:
+	$(CTL) stop $(SERVICE)
+
+restart:
+	$(CTL) restart $(SERVICE)
+
+status:
+	@$(CTL) status $(SERVICE) || true
+
+logs:
+	@$(CTL) logs $(SERVICE)
+
+# -- one process in the foreground, for a terminal you are watching ----------
 
 run:
 	$(PYTHON) -m exchangesim.runner.main --config $(CONFIG)
@@ -47,18 +72,16 @@ scenarios:
 # Start every venue, run every scenario against them, then stop them. This is
 # the single command a CI job needs. Sequence stores are cleared first so a run
 # starts from a known state rather than inheriting the last one's numbering.
+#
+# `start` returns once each venue answers on its control port, so there is no
+# sleep here to be too short on a loaded build agent.
 smoke:
+	@$(CTL) stop >/dev/null 2>&1 || true
 	@rm -rf var
-	@rm -f .smoke.pid
-	@for config in $(VENUES); do \
-	    $(PYTHON) -m exchangesim.runner.main --config $$config >> var-smoke.log 2>&1 & \
-	    echo $$! >> .smoke.pid; \
-	done; \
-	    sleep 3; \
-	    $(PYTHON) -m exchangesim.scenario.runner "$(SCENARIOS)"; \
+	@$(CTL) start $(SMOKE_SERVICES)
+	@$(PYTHON) -m exchangesim.scenario.runner "$(SCENARIOS)"; \
 	    status=$$?; \
-	    while read pid; do kill $$pid 2>/dev/null || true; done < .smoke.pid; \
-	    rm -f .smoke.pid; \
+	    $(CTL) stop $(SMOKE_SERVICES); \
 	    exit $$status
 
 clean:

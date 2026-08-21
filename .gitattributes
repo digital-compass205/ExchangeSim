@@ -6,3 +6,7 @@
 # Binary assets must not be touched.
 *.pdf binary
 *.pcap binary
+
+# cmd.exe mis-parses a parenthesised block in a batch file with LF endings, so
+# the one Windows wrapper is the exception to the rule above.
+*.cmd text eol=crlf

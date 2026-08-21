@@ -48,31 +48,55 @@ is where your 3.6 lives.
 
 ## Start it
 
-Each venue is its own process, with its own ports. Start the ones you need:
+One command brings up both venues and the web board, each in its own process,
+each logging to its own file under `var/log`:
 
 ```bash
-python -m exchangesim.runner.main --config config/japannext.json &
-python -m exchangesim.runner.main --config config/hkex.json &
+bin/exchangesim start          # or: python -m exchangesim.ctl.main start
 ```
 
-Then the web board, which is a separate process again and talks to whichever
-venues are running:
-
-```bash
-python -m exchangesim.web.main --config config/web.json &
+```
+japannext    started (pid 24191)  fix=9001 control=9101
+hkex         started (pid 24192)  fix=9012 binary=9011 control=9102
+web          started (pid 24193)  http=9200
 ```
 
 Open **<http://127.0.0.1:9200>**.
 
+The command returns once each service is answering on its port, so whatever you
+run next -- a test suite, your own client -- will not race the startup. What is
+started is `config/services.json`; add an exchange there and it joins.
+
+```bash
+exchangesim status             # what is up, on which ports, since when
+exchangesim logs hkex -f       # follow one service's log
+exchangesim logs               # the tail of every service's log
+exchangesim restart hkex       # one service, leaving the others alone
+exchangesim stop               # all of it
+exchangesim check              # validate every config, start nothing
+```
+
+Any of them takes service names (`exchangesim start japannext web`), and
+`--start`, `--stop`, `--restart` and `--status` work as spellings of the
+subcommands. A service that is already running is left alone rather than
+started twice.
+
+Logs land in `var/log/<service>.log` and are rotated by the process that writes
+them -- 5 MB a file, five files kept, adjustable in `config/services.json` --
+so an unattended simulator cannot fill a disk. Beside each one is a
+`<service>.out`, which captures anything the process says outside its own
+logging. That file should stay empty; if it is not, read it first.
+
+To run a single venue in the foreground instead, watching it in the terminal:
+
+```bash
+python -m exchangesim.runner.main --config config/japannext.json
+python -m exchangesim.web.main --config config/web.json
+```
+
 A venue that is not running simply shows as offline in the board's venue menu,
 and is picked up automatically when you start it. Stopping the board does not
 disturb the venues, and vice versa.
-
-To check a config without starting anything:
-
-```bash
-python -m exchangesim.runner.main --config config/hkex.json --check
-```
 
 ## Using the web board
 
@@ -262,8 +286,10 @@ config file and restart it.
 
 ## The command line
 
-`exsim` does everything the board does, and more. It prints tables by default
-and JSON with `--json`.
+Two commands, and they do different jobs. `exchangesim` starts and stops the
+processes; `exsim` drives a venue that is already running. `exsim` does
+everything the board does, and more, printing tables by default and JSON with
+`--json`.
 
 ```bash
 export EXSIM_MARKET=DAY                   # saves typing --market
@@ -300,9 +326,15 @@ exsim call behaviour.set '{"action":"drop","count":1}'
 
 ## Running it in CI
 
-Start the venues, run the scenario suite, stop them. A scenario is a JSON file
-of steps driven over real sockets; each names the venue it runs against, so one
-invocation covers them all:
+Start the venues, run the scenario suite, stop them -- which is one target:
+
+```bash
+make smoke
+```
+
+A scenario is a JSON file of steps driven over real sockets; each names the
+venue it runs against, so one invocation covers them all. Against simulators
+that are already up:
 
 ```bash
 python -m exchangesim.scenario.runner "scenarios/*.json"
@@ -325,6 +357,13 @@ One JSON file per venue, in `config/`. The keys you are most likely to touch:
 | `fix.sessions` | one entry per client: comp ID, heartbeat, cancel-on-disconnect |
 | `markets` | which markets exist and what phase each starts in |
 | `audit.capacity` | how many messages the audit keeps; `0` switches it off |
+| `log.max_bytes` | size at which the venue rotates its own log; `0` to never |
+| `log.backups` | how many rotated files to keep |
+
+`config/services.json` is a different kind of file: it says which processes
+`exchangesim start` should bring up, in what order, and where their logs go. It
+holds no ports of its own -- each service's ports are read from that service's
+own config, so moving one cannot leave the listing stale.
 
 `config/web.json` lists the venues the board should watch, and carries three
 switches for what a board is allowed to do:
@@ -339,12 +378,15 @@ serve a board that can only watch.
 ## Where things live
 
 ```
-config/         one file per venue, plus the web board's
+bin/            the exchangesim command
+config/         one file per venue, plus the web board's and services.json
 scenarios/      example scenarios; the CI suite
+var/            runtime state: logs, pidfiles, FIX sequence stores
 exchangesim/    the simulator itself
   venues/       one package per exchange, with its reference data as CSV
   web/          the browser board
   cli/          exsim
+  ctl/          start, stop, status, logs
 docs/specs/     which published specification each behaviour came from
 ```
 

@@ -21,6 +21,7 @@ For installing, starting and using it, see **[README.md](README.md)**.
 - [The message audit](#the-message-audit)
 - [Scenarios](#scenarios)
 - [Testing a client's unhappy paths](#testing-a-clients-unhappy-paths)
+- [Process control](#process-control)
 - [Deployment](#deployment)
 - [Development](#development)
 - [Sources](#sources)
@@ -530,6 +531,65 @@ Injecting PendingNew / PendingCancel reports is deliberately **not** supported:
 the Japannext `ExecType(150)` enumeration has no pending value, so such a report
 is not something a conformant client could receive from this venue.
 
+## Process control
+
+A working simulator is several processes -- one per venue, plus the board --
+and `exchangesim/ctl/` is the single front end to them:
+
+```bash
+exchangesim start | stop | restart | status | logs | check
+```
+
+What it starts is `config/services.json`: a name, a module and a config file
+per service, in the order they must come up. It holds no ports. Each service's
+ports are read from that service's own config when they are needed, so a port
+lives in exactly one place and moving one cannot leave the listing stale.
+
+It is deliberately **not** a service manager. It does not restart a crashed
+process, because on the RHEL 8 target that is systemd's job and two supervisors
+fighting over one daemon is worse than none. What it replaces is the handful of
+backgrounded commands and the `kill` that follows them.
+
+Four decisions carry the weight here.
+
+**The state of the world is a pidfile per service**, under `var/run`. It has to
+survive the controller exiting -- `start` returns to the prompt and the venues
+stay up -- and a pidfile is the only record that does. It is never trusted on
+its own: `supervisor.inspect` checks that the process exists and, on Linux,
+that `/proc/<pid>/cmdline` still names our config, because a recycled pid would
+otherwise be reported as a running venue and `stop` would kill a stranger.
+
+**`start` waits for the port, not for a timer.** A venue is ready when its
+control port accepts a connection, which is after reference data has loaded and
+the acceptors have bound. That is why `make smoke` no longer sleeps three
+seconds and hopes: on a loaded build agent the sleep was either too short or
+wasted. Services are started one at a time in declaration order, so the board
+never comes up before the venues it dials, and stopped in reverse.
+
+**Each daemon rotates its own log.** `--log-file var/log/<name>.log` plus
+`log.max_bytes` and `log.backups` give the process a `RotatingFileHandler`, so
+the file is capped by the only writer that holds it -- nothing outside can
+catch it holding a renamed file, and there is no cron job or `logrotate` config
+to be missing on a host. Five files of 5 MB by default.
+
+**A supervised daemon is started with `--no-console`, and that is not
+cosmetic.** Its stdout and stderr are captured to a *second* file,
+`var/log/<name>.out`, for what happens outside logging: an import error, a
+traceback on the way down, a message from the interpreter itself. Leaving the
+stderr handler on would write every line into both files and rotate only one of
+them. In normal operation the `.out` file stays empty, which makes a non-empty
+one worth reading first -- `exchangesim logs <name> --out` shows it.
+
+Two platform notes. On POSIX a child gets its own session (`os.setsid`), so
+closing the terminal does not take the venue with it, and `stop` is a SIGTERM
+the daemons handle. Windows has no SIGTERM: children are started in their own
+process group and sent a console `CTRL_BREAK_EVENT`, which the daemons handle
+as SIGBREAK -- but console control events only reach processes sharing the
+sender's console, so a `stop` from a different terminal falls back to
+terminating outright. That is survivable rather than graceful, and it is
+survivable because the FIX sequence store is written and fsynced on every
+update, never at shutdown.
+
 ## Deployment
 
 ```bash
@@ -541,13 +601,19 @@ The unit is templated on the config name, so another exchange is another config
 file plus another `systemctl enable`. `ExecStartPre` runs `--check` so a broken
 config fails immediately instead of restart-looping.
 
+The installer also links `bin/exchangesim` onto the path. Use one or the other,
+not both: systemd and `exchangesim start` are two supervisors with two ideas
+about which process is the venue. Under systemd the logs go to the journal;
+under `exchangesim` they go to `var/log`, which the service account owns --
+hence `sudo -u exsim exchangesim start`.
+
 `--check` returns before the venue's setup, so it does not exercise reference
 data loading or port binding; to validate those, start the process.
 
 ## Development
 
 ```bash
-python -m unittest discover -s tests -t .          # 1,092 tests, a few seconds
+python -m unittest discover -s tests -t .          # 1,249 tests, a few seconds
 python -m unittest tests.test_matching             # one module
 python -m exchangesim.scenario.runner "scenarios/*.json"   # needs venues running
 ```

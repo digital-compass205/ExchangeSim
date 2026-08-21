@@ -1,0 +1,50 @@
+{
+  "log": {
+    "dir": "var/log",
+    "level": "INFO",
+    "max_bytes": 5242880,
+    "backups": 5
+  },
+
+  "run_dir": "var/run",
+
+  "services": [
+    {
+      "name": "japannext",
+      "config": "config/japannext.json"
+    },
+    {
+      "name": "hkex",
+      "config": "config/hkex.json"
+    },
+    {
+      "name": "web",
+      "kind": "web",
+      "config": "config/web.json"
+    }
+  ],
+
+  "_notes": [
+    "What 'exchangesim start' brings up, in this order. Order matters on the",
+    "way up and on the way down: the board is a client of the venues, so it",
+    "starts last and stops first, and each service is waited for before the",
+    "next one begins.",
+    "",
+    "'config' points at the service's own file, and every port comes from",
+    "there -- this file never repeats one. 'kind': 'web' selects the board",
+    "process; anything else is a venue. A fourth exchange is a fourth entry",
+    "here and a fourth config file, nothing more.",
+    "",
+    "Paths are relative to the project root (the parent of this directory).",
+    "Set 'root' to override that when the configs live somewhere else.",
+    "",
+    "Each service writes var/log/<name>.log, rotated by the process itself at",
+    "'max_bytes' and keeping 'backups' older files, so an unattended run",
+    "cannot fill a disk. It also gets var/log/<name>.out, which captures what",
+    "the process says outside logging -- an import error, a traceback on the",
+    "way down. That file should stay empty; if it is not, read it first.",
+    "",
+    "'log_max_bytes', 'log_backups' and 'log_level' may be set per service",
+    "for one chatty venue without raising the ceiling for the others."
+  ]
+}

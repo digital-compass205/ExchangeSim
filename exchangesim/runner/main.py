@@ -19,6 +19,7 @@ from ..control.server import ControlServer
 from ..control.subscriptions import Publisher
 from ..core.clock import RealClock
 from ..core.config import Config, ConfigError
+from ..core.logutil import DEFAULT_BACKUPS, DEFAULT_MAX_BYTES
 from ..core.logutil import configure as configure_logging
 from ..core.reactor import Reactor
 from ..venues import registry as venue_registry
@@ -39,6 +40,10 @@ def build_parser():
                         help="override control.port from the config")
     parser.add_argument("--log-level", default=None,
                         help="override log.level from the config")
+    parser.add_argument("--log-file", default=None,
+                        help="override log.file from the config")
+    parser.add_argument("--no-console", action="store_true",
+                        help="log only to the file, not to stderr")
     parser.add_argument("--check", action="store_true",
                         help="load and validate the config, then exit")
     return parser
@@ -99,7 +104,10 @@ def main(argv=None):
 
     configure_logging(
         opts.log_level or config.get("log.level", "INFO"),
-        config.resolve_path("log.file"))
+        opts.log_file or config.resolve_path("log.file"),
+        max_bytes=config.get("log.max_bytes", DEFAULT_MAX_BYTES),
+        backups=config.get("log.backups", DEFAULT_BACKUPS),
+        console=not opts.no_console)
 
     try:
         runtime = Runtime(config).build()
@@ -139,7 +147,10 @@ def _install_signal_handlers(runtime):
         log.info("received signal %d, shutting down", signum)
         runtime.reactor.stop()
 
-    for name in ("SIGINT", "SIGTERM"):
+    # SIGBREAK is Windows' answer to SIGTERM: it is what a CTRL_BREAK_EVENT
+    # from the process controller arrives as, and the only console signal a
+    # detached child can be sent.
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
         sig = getattr(signal, name, None)
         if sig is not None:
             try:

@@ -18,12 +18,19 @@ Development is on Windows against `venv36` (3.6.8, same version as the RHEL 8 ta
 ```bash
 PY=./venv36/Scripts/python.exe            # on RHEL 8: /usr/libexec/platform-python
 
-$PY -m unittest discover -s tests -t .    # full suite (~1090 tests, a few seconds)
+$PY -m unittest discover -s tests -t .    # full suite (~1250 tests, a few seconds)
 $PY -m unittest tests.test_matching       # one module
 $PY -m unittest tests.test_matching.SelfTradePreventionTest.test_cancel_newest_cancels_the_incoming_balance
 
-$PY -m exchangesim.runner.main --config config/japannext.json --check   # validate config only
-$PY -m exchangesim.runner.main --config config/japannext.json           # run a venue
+$PY -m exchangesim.ctl.main start                        # both venues + the board, backgrounded
+$PY -m exchangesim.ctl.main status                      # pids, ports, uptime, log sizes
+$PY -m exchangesim.ctl.main logs hkex -n 40             # tail one service (-f follows)
+$PY -m exchangesim.ctl.main restart hkex                # one service, others untouched
+$PY -m exchangesim.ctl.main stop                        # all of it
+$PY -m exchangesim.ctl.main check                       # every service's config, start nothing
+
+$PY -m exchangesim.runner.main --config config/japannext.json --check   # validate one config
+$PY -m exchangesim.runner.main --config config/japannext.json           # one venue, foreground
 $PY -m exchangesim.runner.main --config config/hkex.json                # binary 9011, FIX 9012, control 9102
 
 $PY -m exchangesim.web.main --config config/web.json    # web board on :9200 (its own process)
@@ -39,7 +46,9 @@ $PY tools/pdftext.py spec.pdf --grep OrdType            # read venue spec PDFs (
 
 `--check` returns before `venue.setup()`, so it does **not** exercise reference-data loading or port binding. To validate those, actually start the process.
 
-**Killing a daemon:** use PowerShell `Get-Process python | Stop-Process -Force`. Bash `kill` on a Windows PID has silently failed here and left daemons running.
+**Stopping daemons:** `ctl.main stop` is the way — it tracks pids in `var/run`, so it stops what it started and nothing else. Only if that fails (a daemon started by hand, a pidfile deleted) fall back to PowerShell `Get-Process python | Stop-Process -Force`; Bash `kill` on a Windows PID has silently failed here and left daemons running.
+
+**`ctl/` is a supervisor of last resort, not a service manager.** It does not restart a crashed process — systemd's job on the target — and two supervisors over one daemon is worse than one. It replaces the backgrounded commands and the `kill` that followed them. Three things in it are load-bearing: a pidfile is verified against `/proc/<pid>/cmdline` before anything is signalled (a recycled pid would otherwise get a stranger killed); `start` waits for the service's *control port* rather than a timer, which is what let `make smoke` drop its `sleep 3`; and a supervised daemon runs with `--no-console` so its rotated `var/log/<name>.log` and its captured `var/log/<name>.out` are not two copies of one stream. A non-empty `.out` means something happened outside logging — read it first.
 
 ## Architecture
 

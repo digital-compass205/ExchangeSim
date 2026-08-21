@@ -1,0 +1,37 @@
+#!/bin/sh
+# Front end for the exchange simulator's process control.
+#
+#   exchangesim start | stop | restart | status | logs | check
+#
+# Deliberately thin: it finds an interpreter and the tree it was installed
+# with, then hands over to exchangesim.ctl.main. Everything the command does
+# lives in Python, so behaviour cannot drift between this and a bare
+# "python -m exchangesim.ctl.main".
+#
+# EXSIM_PYTHON overrides the interpreter; on RHEL 8 the default is right.
+
+set -eu
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+PYTHON="${EXSIM_PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+    for candidate in /usr/libexec/platform-python python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$PYTHON" ]; then
+    echo "exchangesim: no python interpreter found; set EXSIM_PYTHON" >&2
+    exit 2
+fi
+
+# The tree is run in place, never installed into site-packages, so the package
+# is found by path. Whatever the caller already had stays ahead of nothing.
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+
+exec "$PYTHON" -m exchangesim.ctl.main "$@"
