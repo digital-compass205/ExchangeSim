@@ -55,9 +55,10 @@ PRICE_DECIMALS = 3
 
 BEGIN_STRING = "FIXT.1.1"
 
-#: Width of an SEHK stock code as the reference data writes it, zero-padded --
-#: 00001, 00700. A client may send the same code unpadded, which is what
-#: :meth:`HkexVenue.resolve_symbol` is for.
+#: The widest an SEHK stock code gets. Codes are carried here as numbers -- 1,
+#: 700 -- and a client may send the same code zero-padded to this width, which
+#: is what :meth:`HkexVenue.resolve_symbol` is for. A longer number is not a
+#: stock code, so padding is only forgiven up to here.
 SYMBOL_WIDTH = 5
 
 #: The two encodings of OCG-C a session may be registered for. HKEX publishes
@@ -327,14 +328,17 @@ class HkexVenue(Venue):
     def resolve_symbol(self, value):
         """This venue's own SecurityID for what a client sent, or None.
 
-        An SEHK stock code is a *number*, and clients write it either way: the
-        reference data here says ``00001`` and a real gateway sends ``1``. Both
-        name CK Hutchison, and refusing the second as unlisted would be refusing
-        a message the exchange itself accepts.
+        An SEHK stock code is a *number*, and it is carried here as one: the
+        reference data says ``1``, and every report, ladder row and audit entry
+        says ``1``. A client that writes the same code zero-padded -- ``00001``,
+        as HKEX's own listing tables print it -- reaches the same security, and
+        is answered in the venue's spelling. One form on the way out is the
+        point: a client that had to match ``1`` against ``00001`` would be
+        comparing two spellings of one number.
 
         Only the padding is forgiven. A code that is not a number, or one that
-        pads to something this venue does not list, still resolves to nothing --
-        the leniency is about how the same number is written, not about
+        strips to something this venue does not list, still resolves to nothing
+        -- the leniency is about how the same number is written, not about
         guessing which security was meant.
         """
         if not value:
@@ -343,8 +347,8 @@ class HkexVenue(Venue):
             return value
         if not value.isdigit() or len(value) > SYMBOL_WIDTH:
             return None
-        padded = value.zfill(SYMBOL_WIDTH)
-        return padded if padded in self.segments else None
+        bare = value.lstrip("0")
+        return bare if bare in self.segments else None
 
     # -- self-match prevention ---------------------------------------------
 

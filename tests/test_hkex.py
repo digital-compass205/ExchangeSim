@@ -198,6 +198,30 @@ class MarketSegmentTest(HkexTestCase):
         self.assertEqual("NONE", report.get(D.ORDER_ID))
         self.assertIn("not listed", report.get(D.REJECT_TEXT))
 
+    def test_a_stock_code_is_carried_as_a_number(self):
+        # One spelling everywhere the venue speaks -- reference data, reports,
+        # market data, the audit. HKEX's listing tables pad to five digits;
+        # nothing here does, so a client has one form to match against.
+        venue = self.harness.venue
+
+        self.assertIn("1", venue.segments)
+        self.assertNotIn("00001", venue.segments)
+        self.assertEqual("1", venue.resolve_symbol("1"))
+        self.assertEqual("1", venue.resolve_symbol("00001"))
+        self.assertEqual("1", venue.resolve_symbol("0001"))
+        self.assertEqual("700", venue.resolve_symbol("00700"))
+
+    def test_a_code_that_is_not_a_listed_number_resolves_to_nothing(self):
+        venue = self.harness.venue
+
+        self.assertIsNone(venue.resolve_symbol("99999"))
+        self.assertIsNone(venue.resolve_symbol("ABCDE"))
+        self.assertIsNone(venue.resolve_symbol(""))
+        # Padding is forgiven up to the width of a stock code, not beyond it.
+        self.assertIsNone(venue.resolve_symbol("000001"))
+        # Stripping must not turn one security into another, or into nothing.
+        self.assertIsNone(venue.resolve_symbol("0"))
+
     def test_a_session_barred_from_a_segment_is_refused(self):
         config = venue_config(sessions=[
             {"target_comp_id": BROKER1, "markets": ["MAIN"]},
@@ -278,7 +302,7 @@ class SpreadTableTest(HkexTestCase):
         self.assertEqual(D.ExecType.NEW, self.only().get(D.EXEC_TYPE))
 
     def test_a_board_lot_violation_is_rejected(self):
-        # 00700 trades in lots of 100.
+        # 700 trades in lots of 100.
         self.client.new_order("T5", quantity=150, price="393.000")
 
         report = self.only()
@@ -287,7 +311,7 @@ class SpreadTableTest(HkexTestCase):
                          report.get(D.ORD_REJ_REASON))
 
     def test_board_lots_differ_by_security(self):
-        # 08083 trades in lots of 2,000, so 100 is not a board lot there.
+        # 8083 trades in lots of 2,000, so 100 is not a board lot there.
         self.client.new_order("T6", symbol=GEM_SYMBOL, quantity=100,
                               price="0.235")
 
@@ -298,7 +322,7 @@ class SpreadTableTest(HkexTestCase):
 class NineTimesRuleTest(HkexTestCase):
     """The nominal-price limit: 9 times or more, or a ninth or less, is out.
 
-    This is *not* a band of N spreads. It is multiplicative, so at 00700's
+    This is *not* a band of N spreads. It is multiplicative, so at 700's
     nominal of 395.800 the acceptable range runs from 43.978 to 3,562.199.
     """
 
@@ -361,7 +385,7 @@ class QuotationRuleTest(HkexTestCase):
     """24 spreads behind your own side's best, 9 through the other side's.
 
     Anchored on the live BBO, which is what distinguishes it from the
-    nominal-price rule above. 00700's spread at these prices is 0.200, so 24
+    nominal-price rule above. 700's spread at these prices is 0.200, so 24
     spreads is 4.800 and 9 spreads is 1.800.
     """
 
@@ -412,13 +436,13 @@ class QuotationRuleTest(HkexTestCase):
 
     def test_an_empty_side_imposes_no_constraint(self):
         """Otherwise the first order of the day could never be placed."""
-        self.client.new_order("Q6", symbol="00939", quantity=1000,
+        self.client.new_order("Q6", symbol="939", quantity=1000,
                               price="6.180")
 
         self.assertEqual(D.ExecType.NEW, self.only().get(D.EXEC_TYPE))
 
     def test_the_nominal_limit_still_applies_on_top(self):
-        self.client.new_order("Q7", symbol="00939", quantity=1000,
+        self.client.new_order("Q7", symbol="939", quantity=1000,
                               price="60.000")
 
         self.assertEqual(str(D.OrdRejReason.PRICE_EXCEEDS_BAND),
@@ -576,7 +600,7 @@ class RejectedOrderTest(HkexTestCase):
         self.assertEqual("NONE", report.get(D.ORDER_ID))
 
     def test_a_suspended_security_is_refused(self):
-        self.client.new_order("O5", symbol="00028", quantity=2000,
+        self.client.new_order("O5", symbol="28", quantity=2000,
                               price="1.240")
 
         self.assertEqual(D.ExecType.REJECTED, self.only().get(D.EXEC_TYPE))

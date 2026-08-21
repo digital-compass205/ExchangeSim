@@ -188,6 +188,22 @@ class Instrument(object):
             self.symbol, self.lot_size, self.base_price)
 
 
+def symbol_key(symbol):
+    """Sort key that orders numeric symbols as numbers, others as text.
+
+    A stock code is a number at both venues, but only HKEX's are of differing
+    width now that they are carried unpadded -- and plain string order puts
+    ``1299`` before ``179`` and ``28`` after ``2318``. Sorting the digits as an
+    integer is the order a person reads a listing table in. Non-numeric codes
+    keep text order and sort after the numbers, so a mixed universe is still
+    stable rather than raising.
+    """
+    text = str(symbol)
+    if text.isdigit():
+        return (0, int(text), "")
+    return (1, 0, text)
+
+
 # -- CSV loading -------------------------------------------------------------
 
 def load_band_table(path, codec, name="band"):

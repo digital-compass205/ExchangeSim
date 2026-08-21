@@ -40,10 +40,10 @@ BROKER3_ID = "1003"
 
 #: A Main Board security from the shipped universe: base 395.800, lot 100,
 #: spread 0.200 above 200, so the band is 24 x 0.2 = 4.8 -> 391.000 to 400.600.
-SYMBOL = "00700"
+SYMBOL = "700"
 
 #: A GEM security, on its own book: base 0.235, lot 2000, spread 0.005.
-GEM_SYMBOL = "08083"
+GEM_SYMBOL = "8083"
 
 BEGIN_STRING = "FIXT.1.1"
 

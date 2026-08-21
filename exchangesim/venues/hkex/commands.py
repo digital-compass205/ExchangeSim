@@ -14,6 +14,7 @@ from ...control.commands import (
     arg_str,
 )
 from ...core.config import ConfigError
+from ...core.instrument import symbol_key
 from ...core.prices import PriceError
 from .. import common_commands
 from . import rules
@@ -106,9 +107,9 @@ def register(registry, venue):
                   audit=False)
     def _segments(context, args):
         segment = arg_str(args, "segment", upper=True)
-        rows = [{"symbol": symbol, "segment": value}
-                for symbol, value in sorted(venue.segments.items())
-                if segment is None or value == segment]
+        rows = [{"symbol": symbol, "segment": venue.segments[symbol]}
+                for symbol in sorted(venue.segments, key=symbol_key)
+                if segment is None or venue.segments[symbol] == segment]
         return {"segments": rows}
 
 

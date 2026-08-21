@@ -547,16 +547,16 @@ class MarketSegmentTest(AuctionTestCase):
         self.buy("S1", 100, "396.000")
         self.sell("S2", 100, "395.000")
         self.client.new_order("S3", side=D.SideValue.BUY, quantity=1000,
-                              price="6.180", symbol="00939")
+                              price="6.180", symbol="939")
         self.other.new_order("S4", side=D.SideValue.SELL, quantity=1000,
-                             price="6.170", symbol="00939")
+                             price="6.170", symbol="939")
         self.drain_all()
 
         self.close_to("CLOSED")
 
         traded = set(report.get(D.SECURITY_ID)
                      for report in self.fills_for(self.client))
-        self.assertEqual(set([SYMBOL, "00939"]), traded)
+        self.assertEqual(set([SYMBOL, "939"]), traded)
 
 
 class AssumptionTest(AuctionTestCase):

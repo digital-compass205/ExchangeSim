@@ -40,11 +40,16 @@ cd exchangesim
 python -m unittest discover -s tests -t .    # optional: confirm it runs here
 ```
 
-There is nothing to build and nothing to install. If you want it on a server as
-a service, see *Deployment* in [DETAILED_DOC.md](DETAILED_DOC.md).
+That is the whole installation. There is nothing to build, no dependencies to
+fetch, and nothing is registered with the operating system -- no installer, no
+service account, no unit file. A deployment is this clone plus a Python
+interpreter, and everything it writes stays inside the tree, under `var/`.
+Removing it is `rm -rf`.
 
-On Windows, use `venv36\Scripts\python.exe` in place of `python` below if that
-is where your 3.6 lives.
+Python 3.6 or newer, standard library only. On RHEL 8 that is
+`/usr/libexec/platform-python`, which is already there; on Windows, use
+`venv36\Scripts\python.exe` in place of `python` below if that is where your
+3.6 lives.
 
 ## Start it
 
@@ -115,7 +120,7 @@ if this board is allowed to move markets.
 Bookmark any of it:
 
 ```
-http://127.0.0.1:9200/?venue=hkex&market=MAIN&symbol=00700
+http://127.0.0.1:9200/?venue=hkex&market=MAIN&symbol=700
 http://127.0.0.1:9200/?symbol=7203&live=0     # a static snapshot, no updates
 ```
 
@@ -248,10 +253,11 @@ are named by `Symbol(55)`: `7203`, `6758`, `9984` and others in
 `DefaultApplVerID(1137)=9` and `NextExpectedMsgSeqNum(789)`, and the venue
 **refuses** a client-initiated sequence reset — use the `session.reset` command
 instead. Instruments are named by `SecurityID(48)` with
-`SecurityIDSource(22)=8` and `SecurityExchange(207)=XHKG`: `00700`, `00001`,
-`00005` and others in `exchangesim/venues/hkex/reference/securities.csv`. A
+`SecurityIDSource(22)=8` and `SecurityExchange(207)=XHKG`: `700`, `1`,
+`5` and others in `exchangesim/venues/hkex/reference/securities.csv`. A
 stock code is a number, so send it padded or not — `1`, `0001` and `00001` all
-reach CK Hutchison — and reports answer with the padded form the venue lists. No
+reach CK Hutchison — and everything the venue says back writes it as a number,
+never zero-padded, so there is one spelling to match against. No
 message names a market — the security's segment decides which book it reaches.
 Every business message carries a `<Parties>` group and a
 `<DisclosureInstructionGrp>`.

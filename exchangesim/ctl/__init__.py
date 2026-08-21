@@ -8,7 +8,8 @@ front end: ``exchangesim start`` brings up everything named in
 output goes to its own rotated file under ``var/log``.
 
 It is deliberately a *supervisor of last resort*, not a service manager: it
-does not restart a crashed process, because on the RHEL 8 target that is
-systemd's job (see ``deploy/exsimd@.service``). What it replaces is the
-handful of ``nohup ... &`` lines and the ``kill`` that follows them.
+does not restart a crashed process, and it registers nothing with the operating
+system. Everything it writes stays inside the checkout, under ``var/``. What it
+replaces is the handful of ``nohup ... &`` lines and the ``kill`` that follows
+them -- not whatever supervises processes on the host.
 """

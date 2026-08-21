@@ -30,6 +30,7 @@ from ..control.commands import (
 from ..core.behaviour import ACTIONS
 from ..core.commands import NewOrderRequest
 from ..core.config import ConfigError
+from ..core.instrument import symbol_key
 from ..core.enums import (
     CancelReason,
     RejectReason,
@@ -164,9 +165,9 @@ def register(registry, venue):
             if instrument is None:
                 raise CommandError("unknown symbol '%s'" % symbol, E_NOT_FOUND)
             return {"instruments": [instrument.describe(venue.codec)]}
-        return {"instruments": [instrument.describe(venue.codec)
-                                for _symbol, instrument
-                                in sorted(instruments.items())]}
+        return {"instruments": [
+            instruments[symbol].describe(venue.codec)
+            for symbol in sorted(instruments, key=symbol_key)]}
 
     @registry.add("instrument.set",
                   "Override an instrument's base price, band or tradability.")
@@ -764,19 +765,27 @@ def _optional_market(venue, args):
 
 
 def _require_symbol(venue, args):
-    symbol = arg_str(args, "symbol", required=True)
-    if symbol not in venue.instruments:
-        raise CommandError("unknown symbol '%s'" % symbol, E_NOT_FOUND)
-    return symbol
+    return _resolve_symbol(venue, arg_str(args, "symbol", required=True))
 
 
 def _optional_symbol(venue, args):
     symbol = arg_str(args, "symbol")
-    if symbol is None:
-        return None
-    if symbol not in venue.instruments:
+    return None if symbol is None else _resolve_symbol(venue, symbol)
+
+
+def _resolve_symbol(venue, symbol):
+    """The venue's own spelling, or a refusal naming what was asked for.
+
+    Through the venue rather than straight at ``venue.instruments`` so the
+    control plane accepts exactly what the wire does: an HKEX code is a number
+    and 00001 is 1, whichever door it came in by. The answer is always the
+    venue's spelling, so a command cannot report back a code the venue would
+    not itself write.
+    """
+    resolved = venue.resolve_symbol(symbol)
+    if resolved is None:
         raise CommandError("unknown symbol '%s'" % symbol, E_NOT_FOUND)
-    return symbol
+    return resolved
 
 
 def _require_session(venue, args):

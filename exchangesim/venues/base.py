@@ -89,6 +89,19 @@ class Venue(object):
         raise NotImplementedError(
             "venue '%s' cannot create instruments at runtime" % self.key)
 
+    def resolve_symbol(self, value):
+        """This venue's own spelling of a symbol a client sent, or None.
+
+        Most venues have exactly one spelling of a symbol and this is a lookup.
+        A venue whose codes are numbers, written with or without padding,
+        overrides it -- see :meth:`HkexVenue.resolve_symbol`. Every surface
+        goes through here, wire and control plane alike, so what names a
+        security cannot depend on which door it arrived at.
+        """
+        if not value:
+            return None
+        return value if value in self.instruments else None
+
     def books_for(self, instrument):
         """The markets that should carry this instrument's book.
 

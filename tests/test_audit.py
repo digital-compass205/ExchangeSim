@@ -393,7 +393,7 @@ class RenderTest(unittest.TestCase):
 
     def test_the_instrument_is_taken_from_whichever_tag_the_dialect_uses(self):
         self.assertEqual("7203", render.symbol_of({55: "7203"}))
-        self.assertEqual("00700", render.symbol_of({48: "00700"}))
+        self.assertEqual("700", render.symbol_of({48: "700"}))
         self.assertIsNone(render.symbol_of({11: "A-1"}))
 
 
@@ -603,7 +603,7 @@ class HkexAuditTest(unittest.TestCase):
 
         rows = [row for row in harness.dispatch("audit", {})["entries"]
                 if row["type"] == "D"]
-        self.assertEqual(["00700"], [row["symbol"] for row in rows])
+        self.assertEqual(["700"], [row["symbol"] for row in rows])
 
 
 class DisabledAuditTest(unittest.TestCase):

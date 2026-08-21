@@ -71,11 +71,12 @@ exchangesim/
   cli/          the exsim command-line client
   scenario/     declarative scenario runner
   runner/       process entry point
-config/         one JSON file per venue instance, plus the web board's
+bin/            the exchangesim command
+config/         one JSON file per venue instance, the web board's, services.json
 scenarios/      example scenarios; the CI suite
-deploy/         systemd unit and install script
+var/            runtime state: logs, pidfiles, FIX sequence stores
 tools/          pdftext.py, a stdlib PDF text extractor for reading venue specs
-tests/          1,190 tests, unittest only
+tests/          1,258 tests, unittest only
 ```
 
 Three layers with a hard dependency rule — arrows point inwards only, and
@@ -181,7 +182,7 @@ Because the periods are command-driven, an auction is a sequence of commands:
 ```bash
 exsim --port 9102 call state.set '{"market":"MAIN","state":"CLOSING_AUCTION"}'
 #  ... orders accumulate; the book may legitimately cross ...
-exsim --port 9102 call auction '{"market":"MAIN","symbol":"00700"}'
+exsim --port 9102 call auction '{"market":"MAIN","symbol":"700"}'
 #  -> {"iep": "396.400", "iev": 2500, "imbalance": 800,
 #      "imbalance_side": "BUY", "reason": "lowest imbalance", ...}
 exsim --port 9102 call auction.lock '{"market":"MAIN"}'   # no more cancels
@@ -546,9 +547,9 @@ ports are read from that service's own config when they are needed, so a port
 lives in exactly one place and moving one cannot leave the listing stale.
 
 It is deliberately **not** a service manager. It does not restart a crashed
-process, because on the RHEL 8 target that is systemd's job and two supervisors
-fighting over one daemon is worse than none. What it replaces is the handful of
-backgrounded commands and the `kill` that follows them.
+process. Whatever supervises processes on a given host can do that, and two
+supervisors fighting over one daemon is worse than none. What it replaces is
+the handful of backgrounded commands and the `kill` that follows them.
 
 Four decisions carry the weight here.
 
@@ -592,20 +593,29 @@ update, never at shutdown.
 
 ## Deployment
 
+There is no installer, no service account and nothing that touches the system:
+a deployment is a clone of this repository and a Python interpreter.
+
 ```bash
-sudo ./deploy/install.sh                 # to /opt/exchangesim
-systemctl enable --now exsimd@japannext
+git clone <this repository> exchangesim
+cd exchangesim
+bin/exchangesim start
 ```
 
-The unit is templated on the config name, so another exchange is another config
-file plus another `systemctl enable`. `ExecStartPre` runs `--check` so a broken
-config fails immediately instead of restart-looping.
+Everything it writes stays inside the tree -- `var/log` for logs, `var/run` for
+pidfiles, `var/<venue>` for FIX sequence stores -- so the account that runs it
+needs nothing but write access to its own checkout, and removing it is `rm -rf`.
+Nothing is registered with the OS, so nothing has to be unregistered.
 
-The installer also links `bin/exchangesim` onto the path. Use one or the other,
-not both: systemd and `exchangesim start` are two supervisors with two ideas
-about which process is the venue. Under systemd the logs go to the journal;
-under `exchangesim` they go to `var/log`, which the service account owns --
-hence `sudo -u exsim exchangesim start`.
+On RHEL 8 the interpreter is `/usr/libexec/platform-python` (3.6.8), which is
+present by default; `bin/exchangesim` finds it. Set `EXSIM_PYTHON` to override.
+There are no dependencies to install, at build time or run time.
+
+Keeping it running across a reboot or a crash is deliberately out of scope --
+`ctl/` is a supervisor of last resort, not a service manager (see [Process
+control](#process-control)). If a host needs that, whatever already supervises
+processes there can run `bin/exchangesim start`; that is a decision about the
+host, not about the simulator, and this repository does not make it.
 
 `--check` returns before the venue's setup, so it does not exercise reference
 data loading or port binding; to validate those, start the process.
@@ -613,7 +623,7 @@ data loading or port binding; to validate those, start the process.
 ## Development
 
 ```bash
-python -m unittest discover -s tests -t .          # 1,249 tests, a few seconds
+python -m unittest discover -s tests -t .          # 1,258 tests, a few seconds
 python -m unittest tests.test_matching             # one module
 python -m exchangesim.scenario.runner "scenarios/*.json"   # needs venues running
 ```

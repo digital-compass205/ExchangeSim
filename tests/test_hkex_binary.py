@@ -130,22 +130,26 @@ class BinaryOrderTest(unittest.TestCase):
         self.assertEqual(report.get(D.SECURITY_ID), GEM_SYMBOL)
 
     def test_a_stock_code_is_accepted_padded_or_not(self):
-        # A real gateway sends 1 where the reference data says 00001; both name
+        # HKEX's listing tables print 00001; a real gateway sends 1. Both name
         # CK Hutchison, and the exchange itself takes either.
-        self.client.new_order("B11", symbol="1", quantity=500, price="42.500")
+        self.client.new_order("B11", symbol="00001", quantity=500,
+                              price="42.500")
         [report] = self.client.reports()
         self.assertEqual(report.get(D.EXEC_TYPE), D.ExecType.NEW)
-        # The venue answers in its own spelling of the code.
-        self.assertEqual(report.get(D.SECURITY_ID), "00001")
+        # One spelling on the way out, whichever came in: the code as a number.
+        self.assertEqual(report.get(D.SECURITY_ID), "1")
 
-    def test_padding_is_forgiven_but_the_number_is_not_guessed(self):
+    def test_every_spelling_of_one_code_answers_the_same_way(self):
         self.client.new_order("B12", symbol="00700", quantity=100,
                               price="395.800")
-        self.client.new_order("B13", symbol="700", quantity=100,
+        self.client.new_order("B13", symbol="0700", quantity=100,
                               price="395.800")
+        # A client left matching 700 against 00700 would be comparing two
+        # spellings of one number, so the venue only ever writes one.
         self.assertEqual([r.get(D.SECURITY_ID) for r in self.client.reports()],
                          [SYMBOL, SYMBOL])
 
+    def test_padding_is_forgiven_but_the_number_is_not_guessed(self):
         # Not a listed number, and not a number at all: both still refused.
         self.client.new_order("B14", symbol="99999", quantity=100)
         self.client.new_order("B15", symbol="ABCDE", quantity=100)
@@ -153,13 +157,16 @@ class BinaryOrderTest(unittest.TestCase):
             self.assertEqual(report.get(D.EXEC_TYPE), D.ExecType.REJECTED)
             self.assertIn("not listed", report.get(D.REJECT_TEXT))
 
-    def test_an_order_is_cancelled_by_the_code_it_was_sent_with(self):
-        self.client.new_order("B16", symbol="1", quantity=500, price="42.500")
+    def test_an_order_placed_padded_is_cancelled_unpadded(self):
+        # The two spellings are one security, so an order does not have to be
+        # cancelled with the spelling it arrived under.
+        self.client.new_order("B16", symbol="00001", quantity=500,
+                              price="42.500")
         self.client.drain()
         self.client.cancel("B17", "B16", symbol="1", quantity=500)
         [report] = self.client.reports()
         self.assertEqual(report.get(D.EXEC_TYPE), D.ExecType.CANCELED)
-        self.assertEqual(report.get(D.SECURITY_ID), "00001")
+        self.assertEqual(report.get(D.SECURITY_ID), "1")
 
     def test_an_odd_lot_is_still_refused(self):
         self.client.new_order("B4", quantity=50)

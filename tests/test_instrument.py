@@ -17,6 +17,7 @@ from exchangesim.core.instrument import (
     load_band_table,
     load_instruments,
     load_tick_table,
+    symbol_key,
 )
 from exchangesim.core.prices import PriceCodec
 
@@ -177,6 +178,27 @@ class InstrumentTest(unittest.TestCase):
         self.assertEqual("2845.5", described["base_price"])
         self.assertEqual("2345.5", described["price_low"])
         self.assertEqual("3345.5", described["price_high"])
+
+
+class SymbolOrderTest(unittest.TestCase):
+    """A stock code is a number, so a listing has to read like one."""
+
+    def test_numeric_codes_sort_as_numbers(self):
+        # HKEX codes are carried unpadded, so plain string order would put
+        # 1299 before 179 and 28 after 2318.
+        codes = ["1299", "179", "28", "2318", "1", "9988", "700"]
+        self.assertEqual(["1", "28", "179", "700", "1299", "2318", "9988"],
+                         sorted(codes, key=symbol_key))
+
+    def test_fixed_width_codes_are_unaffected(self):
+        # Japannext's are all four digits, where the two orders agree.
+        codes = ["9984", "7203", "6758"]
+        self.assertEqual(sorted(codes), sorted(codes, key=symbol_key))
+
+    def test_a_mixed_universe_still_sorts(self):
+        codes = ["700", "ABC", "1", "ZZ"]
+        self.assertEqual(["1", "700", "ABC", "ZZ"],
+                         sorted(codes, key=symbol_key))
 
 
 class CsvLoadingTest(unittest.TestCase):
