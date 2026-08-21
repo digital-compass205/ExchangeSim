@@ -13,6 +13,12 @@
   "allow_market_control": true,
   "allow_audit": true,
 
+  "board": {
+    "buy_side": "right",
+    "buy_colour": "red",
+    "sell_colour": "green"
+  },
+
   "venues": [
     {
       "key": "japannext",
@@ -46,6 +52,22 @@
     "",
     "allow_audit is a third switch, for the message audit view. It shows",
     "every client's traffic, so a board that may not place an order should",
-    "not thereby be able to read everyone else's."
+    "not thereby be able to read everyone else's.",
+    "",
+    "'board' is presentation, and grants nothing. 'buy_side' puts the buying",
+    "side of the ticket, the Level 1 quotes and the depth ladder all on one",
+    "side -- 'right' by default, which is where a Japanese board puts bids.",
+    "'left' moves all three together; they are never split, because a ticket",
+    "that disagreed with the ladder above it is a click waiting to go the",
+    "wrong way.",
+    "",
+    "'buy_colour' and 'sell_colour' name a hue from the stylesheet's palette:",
+    "red, green, blue or amber. Each is defined for both the dark and the",
+    "light theme and each clears the 4.5:1 contrast floor in both, which is",
+    "why it is a name and not a colour value. The default pair is the",
+    "Japanese convention -- buying red, selling green -- which is the reverse",
+    "of the Western one. The two sides may not wear the same hue.",
+    "",
+    "Both spellings, buy_colour and buy_color, are read."
   ]
 }

@@ -16,7 +16,7 @@ from ..core.config import Config, ConfigError
 from ..core.logutil import DEFAULT_BACKUPS, DEFAULT_MAX_BYTES
 from ..core.logutil import configure as configure_logging
 from ..core.reactor import Reactor
-from .app import WebApp
+from .app import DEFAULT_BOARD, WebApp
 
 log = logging.getLogger("exchangesim.web")
 
@@ -71,7 +71,76 @@ def build_app(config, reactor):
         reactor, specs,
         allow_order_entry=config.get("allow_order_entry", True),
         allow_market_control=config.get("allow_market_control", True),
-        allow_audit=config.get("allow_audit", True))
+        allow_audit=config.get("allow_audit", True),
+        board=build_board(config))
+
+
+#: Which side of the board the buying side sits on.
+BUY_SIDES = ("right", "left")
+
+#: The hues ``style.css`` defines for a side. A name rather than a colour, and
+#: validated here rather than in the browser: every one of these is checked
+#: against the 4.5:1 contrast floor in both themes by
+#: ``tests/test_web_palette.py``, and a free-text colour would let a config
+#: write a board nobody can read.
+SIDE_COLOURS = ("red", "green", "blue", "amber")
+
+
+def build_board(config):
+    """The board's presentation settings, validated.
+
+    Layout and colour only -- nothing here grants or withholds a capability.
+    It is served from the config rather than left to the browser so that
+    everyone looking at one board reads it the same way round; two people
+    describing the same screen differently is a real hazard on a trading desk.
+    """
+    section = config.get("board")
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise ConfigError("'board' must be an object")
+
+    board = {}
+    side = section.get("buy_side")
+    if side is not None:
+        side = str(side).strip().lower()
+        if side not in BUY_SIDES:
+            raise ConfigError("board.buy_side must be one of %s, not '%s'"
+                              % (", ".join(BUY_SIDES), side))
+        board["buy_side"] = side
+
+    for name in ("buy", "sell"):
+        colour = _side_colour(section, name)
+        if colour is not None:
+            board["%s_colour" % name] = colour
+
+    buy = board.get("buy_colour", DEFAULT_BOARD["buy_colour"])
+    sell = board.get("sell_colour", DEFAULT_BOARD["sell_colour"])
+    if buy == sell:
+        raise ConfigError(
+            "board: buy and sell cannot both be %s -- the two sides are told "
+            "apart by colour on the ladder, the ticket and the tape" % buy)
+    return board
+
+
+def _side_colour(section, name):
+    """``buy_colour``/``sell_colour``, spelled either way, or None.
+
+    Both spellings are accepted because the alternative is a config that looks
+    right, is silently ignored, and leaves the board in its default colours.
+    """
+    keys = ("%s_colour" % name, "%s_color" % name)
+    present = [key for key in keys if section.get(key) is not None]
+    if not present:
+        return None
+    values = set(str(section[key]).strip().lower() for key in present)
+    if len(values) > 1:
+        raise ConfigError("board: %s and %s disagree" % keys)
+    colour = values.pop()
+    if colour not in SIDE_COLOURS:
+        raise ConfigError("board.%s must be one of %s, not '%s'"
+                          % (keys[0], ", ".join(SIDE_COLOURS), colour))
+    return colour
 
 
 def main(argv=None):

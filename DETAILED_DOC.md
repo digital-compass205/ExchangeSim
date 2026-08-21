@@ -76,7 +76,7 @@ config/         one JSON file per venue instance, the web board's, services.json
 scenarios/      example scenarios; the CI suite
 var/            runtime state: logs, pidfiles, FIX sequence stores
 tools/          pdftext.py, a stdlib PDF text extractor for reading venue specs
-tests/          1,258 tests, unittest only
+tests/          1,273 tests, unittest only
 ```
 
 Three layers with a hard dependency rule — arrows point inwards only, and
@@ -410,9 +410,36 @@ table, and could not tell. `exsim ladder` renders the same thing in a terminal.
 The page is dark or light according to `prefers-color-scheme`, which is one
 `@media` block of token values in `static/style.css` because every colour in
 that file is a custom property and none is written inline. Dark is what a
-browser stating no preference gets. The Japanese convention holds in both: the
-`--bid`/`--ask` tokens are red for buying and green for selling, darkened in the
-light palette until they carry on white.
+browser stating no preference gets.
+
+A fourth key, `board`, says how the page is laid out and coloured. It grants
+nothing — it is presentation — but it is served from the config rather than
+chosen per browser, because two people describing one screen the other way
+round is a real hazard on a desk.
+
+```json
+{ "board": { "buy_side": "right", "buy_colour": "red", "sell_colour": "green" } }
+```
+
+**`buy_side` moves three things at once**: the ticket's Buy button, Level 1's
+bid quote and the ladder's bid column. They are never split. A ticket that
+disagreed with the ladder above it is a click waiting to go the wrong way, so
+one setting places all three, `right` by default — where a Japanese depth board
+puts bids. Two of the three are CSS `order` off a `data-buy-side` attribute on
+`<html>`; the ladder is the exception, because table cells cannot be reordered
+by `order`, so `app.js:ladderCells` is the single place that writes them in
+sequence and the static `<thead>` is reversed once at boot.
+
+**A colour is a name, not a value.** `style.css` defines `--hue-red`,
+`--hue-green`, `--hue-blue` and `--hue-amber` in both palettes, and `--bid` and
+`--ask` are *aliases* onto two of them rather than literals — which is what lets
+the page repoint a side at boot while keeping that hue's light-theme version.
+The server validates the name against the same four, because a free-text colour
+would let a config write a board nobody can read: every hue is checked against
+the 4.5:1 floor, in both themes, on every surface and on its own wash, by
+`tests/test_web_palette.py`. The default pair is the Japanese convention — red
+for buying, green for selling, the reverse of the Western one — and the two
+sides may not wear the same hue.
 
 ## The message audit
 
@@ -623,7 +650,7 @@ data loading or port binding; to validate those, start the process.
 ## Development
 
 ```bash
-python -m unittest discover -s tests -t .          # 1,258 tests, a few seconds
+python -m unittest discover -s tests -t .          # 1,273 tests, a few seconds
 python -m unittest tests.test_matching             # one module
 python -m exchangesim.scenario.runner "scenarios/*.json"   # needs venues running
 ```

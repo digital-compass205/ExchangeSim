@@ -4,8 +4,10 @@ import json
 import unittest
 
 from exchangesim.core.clock import FixedClock
+from exchangesim.core.config import Config, ConfigError
 from exchangesim.core.reactor import Reactor
 from exchangesim.web.app import WebApp
+from exchangesim.web.main import build_board
 
 from .websupport import (
     FakeConn,
@@ -93,6 +95,93 @@ class RoutingTest(AppTest):
     def test_an_unknown_venue_is_404(self):
         status, _payload = self.result_of(json_request("/api/nasdaq/bbo"))
         self.assertEqual(404, status)
+
+
+class BoardLayoutTest(AppTest):
+    """How the board is laid out and coloured, and where that is decided.
+
+    Presentation only, and served from the config rather than chosen in the
+    browser: two people describing the same screen the other way round is a
+    real hazard, and a per-browser setting would produce exactly that.
+    """
+
+    def test_the_defaults_are_buy_right_and_the_japanese_colours(self):
+        _status, payload = self.result_of(make_request("GET", "/api/venues"))
+
+        self.assertEqual({"buy_side": "right", "buy_colour": "red",
+                          "sell_colour": "green"}, payload["board"])
+
+    def test_config_overrides_reach_the_page(self):
+        self.app.board = dict(self.app.board)
+        self.app.board.update({"buy_side": "left", "buy_colour": "blue"})
+
+        _status, payload = self.result_of(make_request("GET", "/api/venues"))
+
+        self.assertEqual("left", payload["board"]["buy_side"])
+        self.assertEqual("blue", payload["board"]["buy_colour"])
+        # Untouched keys keep their defaults rather than disappearing.
+        self.assertEqual("green", payload["board"]["sell_colour"])
+
+    def test_a_partial_board_config_is_filled_in(self):
+        app = WebApp(self.reactor, board={"buy_side": "left"})
+
+        self.assertEqual({"buy_side": "left", "buy_colour": "red",
+                          "sell_colour": "green"}, app.board)
+
+
+class BoardConfigTest(unittest.TestCase):
+    """What ``board`` in web.json may say, and what it may not."""
+
+    def _board(self, section):
+        return build_board(Config({"board": section} if section is not None
+                                  else {}))
+
+    def test_no_board_section_means_the_defaults(self):
+        self.assertEqual({}, self._board(None))
+
+    def test_buy_side_is_accepted_either_way_round(self):
+        self.assertEqual({"buy_side": "left"}, self._board({"buy_side": "LEFT"}))
+        self.assertEqual({"buy_side": "right"},
+                         self._board({"buy_side": "right"}))
+
+    def test_an_unknown_side_names_the_real_ones(self):
+        with self.assertRaises(ConfigError) as caught:
+            self._board({"buy_side": "middle"})
+        self.assertIn("right", str(caught.exception))
+
+    def test_a_colour_is_a_palette_name(self):
+        self.assertEqual({"buy_colour": "blue"},
+                         self._board({"buy_colour": "Blue"}))
+
+    def test_the_american_spelling_is_accepted(self):
+        # Otherwise the config looks right, is silently ignored, and the board
+        # comes up in its default colours.
+        self.assertEqual({"sell_colour": "amber"},
+                         self._board({"sell_color": "amber"}))
+
+    def test_the_two_spellings_may_not_disagree(self):
+        with self.assertRaises(ConfigError):
+            self._board({"buy_colour": "blue", "buy_color": "amber"})
+
+    def test_a_colour_off_the_palette_is_refused(self):
+        # A free-text colour would let a config write an illegible board; the
+        # named hues are the ones checked against the contrast floor.
+        with self.assertRaises(ConfigError) as caught:
+            self._board({"buy_colour": "#ff00ff"})
+        self.assertIn("red", str(caught.exception))
+
+    def test_both_sides_may_not_wear_one_colour(self):
+        with self.assertRaises(ConfigError) as caught:
+            self._board({"buy_colour": "green"})
+        self.assertIn("cannot both be", str(caught.exception))
+
+    def test_swapping_the_two_colours_is_allowed(self):
+        board = self._board({"buy_colour": "green", "sell_colour": "red"})
+        self.assertEqual({"buy_colour": "green", "sell_colour": "red"}, board)
+
+    def test_board_must_be_an_object(self):
+        with self.assertRaises(ConfigError):
+            self._board("left")
 
 
 class ProxyTest(AppTest):

@@ -53,6 +53,15 @@ AUDIT_COMMANDS = frozenset(("audit", "audit.entry", "audit.types"))
 #: Idle comment sent down each stream so intermediaries do not time it out.
 KEEPALIVE_SECONDS = 20.0
 
+#: How the board is laid out and coloured, when the config says nothing. Buy on
+#: the right is where the depth board puts bids, and red-for-buying is the
+#: Japanese convention the stylesheet is written around; both are defaults
+#: rather than law, because a desk that reads the other way round should not
+#: have to edit a stylesheet. This is presentation only -- no capability, and
+#: no venue behaviour, turns on any of it.
+DEFAULT_BOARD = {"buy_side": "right", "buy_colour": "red",
+                 "sell_colour": "green"}
+
 
 class EventStream(object):
     """One browser holding a Server-Sent Events response open.
@@ -87,12 +96,14 @@ class WebApp(object):
 
     def __init__(self, reactor, venues=(), static_root=None,
                  allow_order_entry=True, allow_market_control=True,
-                 allow_audit=True):
+                 allow_audit=True, board=None):
         self.reactor = reactor
         self.static_root = static_root or STATIC_ROOT
         self.allow_order_entry = allow_order_entry
         self.allow_market_control = allow_market_control
         self.allow_audit = allow_audit
+        self.board = dict(DEFAULT_BOARD)
+        self.board.update(board or {})
 
         self.publisher = Publisher()
         self.streams = set()
@@ -177,7 +188,8 @@ class WebApp(object):
                                  "allow_order_entry": self.allow_order_entry,
                                  "allow_market_control":
                                      self.allow_market_control,
-                                 "allow_audit": self.allow_audit})
+                                 "allow_audit": self.allow_audit,
+                                 "board": self.board})
             return
         if path.startswith("/api/"):
             self._api(request, responder, path[len("/api/"):])

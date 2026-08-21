@@ -43,6 +43,9 @@
          board lot, but an odd lot must still be enterable. The venue is the
          only thing that decides whether an order is acceptable. -->
     <form id="order-form" novalidate>
+      <!-- Buy sits on the right, under the ladder's bid column. Which side is
+           which is settled by CSS `order`, not by the order here, so this stays
+           the tab order: Buy first, since it is the checked one. -->
       <div class="sides">
         <label class="side side-buy">
           <input type="radio" name="side" value="BUY" checked> Buy
@@ -133,6 +136,8 @@
  <div class="column">
   <section class="panel level1">
     <h2>Level 1</h2>
+    <!-- Reads ask, last, bid on screen, matching the ladder below it; the
+         three are placed by CSS `order`, so this stays in reading order. -->
     <div class="quotes">
       <div class="quote bid">
         <span class="quote-label">Bid</span>

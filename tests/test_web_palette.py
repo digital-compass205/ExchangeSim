@@ -22,13 +22,20 @@ STYLESHEET = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 #: WCAG AA for body text.
 FLOOR = 4.5
 
+#: The hues a side may be configured to wear. Any of them can end up as --bid
+#: or --ask, so every one has to clear the floor, not just the two the shipped
+#: config happens to select.
+HUES = ("red", "green", "blue", "amber")
+
 #: Tokens that carry text, and the opaque surfaces text can land on.
-INK_TOKENS = ("ink", "ink-dim", "ink-faint", "ask", "bid", "accent", "ok", "down")
+INK_TOKENS = (("ink", "ink-dim", "ink-faint", "ask", "bid", "accent", "ok",
+               "down") + tuple("hue-" + name for name in HUES))
 SURFACES = ("bg", "panel", "sunken", "field")
 
 #: A coloured cell is that colour's text over a tint of the same hue, so the
 #: pairing has to be checked as well as the plain surfaces.
-WASHES = (("ask", "ask-bg"), ("bid", "bid-bg"))
+WASHES = ((("ask", "ask-bg"), ("bid", "bid-bg"))
+          + tuple(("hue-" + name, "hue-%s-wash" % name) for name in HUES))
 
 
 def _linear(channel):
@@ -71,6 +78,25 @@ def parse_colour(value):
     return None
 
 
+def resolve(palette, name, depth=0):
+    """A token's value, following ``var(--other)`` to the colour behind it.
+
+    ``--bid`` and ``--ask`` are aliases onto a hue rather than literals, which
+    is what lets the page repoint them at boot without losing the light theme's
+    version of that hue. The checks below want the colour, so they come
+    through here.
+    """
+    if depth > 8:
+        raise AssertionError("--%s resolves in a loop" % name)
+    value = palette.get(name)
+    if value is None:
+        raise AssertionError("--%s is not defined" % name)
+    match = re.match(r"^var\(\s*--([a-z0-9-]+)\s*\)$", value.strip())
+    if match:
+        return resolve(palette, match.group(1), depth + 1)
+    return value
+
+
 def read_stylesheet():
     with open(STYLESHEET, encoding="utf-8") as handle:
         return handle.read()
@@ -110,6 +136,28 @@ class PaletteStructureTest(unittest.TestCase):
         for name in INK_TOKENS + SURFACES:
             self.assertIn(name, self.dark)
 
+    def test_the_configurable_hues_are_the_ones_the_server_offers(self):
+        """One list of colours, not two that drift apart.
+
+        ``build_board`` refuses a name the stylesheet has no token for; a token
+        the server will not accept is a colour nobody can select.
+        """
+        from exchangesim.web.main import SIDE_COLOURS
+
+        self.assertEqual(sorted(HUES), sorted(SIDE_COLOURS))
+        for name in SIDE_COLOURS:
+            self.assertIn("hue-" + name, self.dark)
+            self.assertIn("hue-%s-wash" % name, self.dark)
+
+    def test_the_sides_are_aliases_onto_a_hue(self):
+        # A literal here would be the colour of one theme, and the page swaps
+        # these two at boot by repointing them at another hue token.
+        for palette in (self.dark, self.light):
+            for name in ("bid", "ask", "bid-bg", "ask-bg"):
+                self.assertTrue(palette[name].startswith("var(--hue-"),
+                                "--%s must alias a hue, not %s"
+                                % (name, palette[name]))
+
     def test_no_colour_is_written_outside_the_two_palettes(self):
         """The rule the stylesheet states about itself, enforced.
 
@@ -132,14 +180,14 @@ class ContrastTest(unittest.TestCase):
     def _check(self, palette, theme):
         surfaces = {}
         for name in SURFACES:
-            colour = parse_colour(palette[name])
+            colour = parse_colour(resolve(palette, name))
             self.assertIsNotNone(colour, "%s --%s is not an opaque colour"
                                  % (theme, name))
             surfaces[name] = colour
 
         for ink_name in INK_TOKENS:
-            ink = parse_colour(palette[ink_name])
-            self.assertIsNotNone(ink)
+            ink = parse_colour(resolve(palette, ink_name))
+            self.assertIsNotNone(ink, "%s --%s is not a colour" % (theme, ink_name))
             for surface_name, surface in surfaces.items():
                 ratio = contrast(ink, surface)
                 self.assertGreaterEqual(
@@ -154,10 +202,10 @@ class ContrastTest(unittest.TestCase):
         self._check(self.light, "light")
 
     def _check_washes(self, palette, theme):
-        panel = parse_colour(palette["panel"])
+        panel = parse_colour(resolve(palette, "panel"))
         for ink_name, wash_name in WASHES:
-            ink = parse_colour(palette[ink_name])
-            wash = parse_colour(palette[wash_name])
+            ink = parse_colour(resolve(palette, ink_name))
+            wash = parse_colour(resolve(palette, wash_name))
             self.assertIsNotNone(wash, "--%s must be a colour" % wash_name)
             ratio = contrast(ink, composite(wash, panel))
             self.assertGreaterEqual(
@@ -171,8 +219,8 @@ class ContrastTest(unittest.TestCase):
 
     def test_a_button_fill_carries_its_own_ink(self):
         for palette, theme in ((self.dark, "dark"), (self.light, "light")):
-            ratio = contrast(parse_colour(palette["on-accent"]),
-                             parse_colour(palette["accent"]))
+            ratio = contrast(parse_colour(resolve(palette, "on-accent")),
+                             parse_colour(resolve(palette, "accent")))
             self.assertGreaterEqual(
                 ratio, FLOOR,
                 "%s: --on-accent on --accent is %.2f:1" % (theme, ratio))
@@ -185,15 +233,15 @@ class ContrastTest(unittest.TestCase):
         however bright its ink.
         """
         for palette, theme in ((self.dark, "dark"), (self.light, "light")):
-            panel = parse_colour(palette["panel"])
-            page = parse_colour(palette["bg"])
-            edge = parse_colour(palette["panel-edge"])
+            panel = parse_colour(resolve(palette, "panel"))
+            page = parse_colour(resolve(palette, "bg"))
+            edge = parse_colour(resolve(palette, "panel-edge"))
             self.assertGreaterEqual(contrast(panel, page), 1.15,
                                     "%s: panel and page are one flat field" % theme)
             self.assertGreaterEqual(contrast(edge, panel), 1.5,
                                     "%s: panel borders are invisible" % theme)
             for row in ("zebra", "row-hover"):
-                blended = composite(parse_colour(palette[row]), panel)
+                blended = composite(parse_colour(resolve(palette, row)), panel)
                 self.assertGreaterEqual(
                     contrast(blended, panel), 1.05,
                     "%s: --%s does not separate one row from the next"

@@ -28,16 +28,33 @@
   --ink-dim: #b0b9c9;
   --ink-faint: #8b95a8;
 
-  /* Japanese boards put asks (sell) on the left and bids (buy) on the right,
-     and they colour by direction rather than by warm/cool: buying is red,
-     selling is green. That is the reverse of the Western convention, so it is
-     stated here once rather than left to be inferred from two hex values.
-     Each reads at better than 4.5:1 on its own wash as well as on the panel,
+  /* The hues a side may be painted in, and then which side wears which.
+     Splitting the two is what makes the pairing configurable: --bid and --ask
+     stay the only names the rest of the file knows, and the page rewrites
+     those two aliases from config at boot. The indirection has to be a `var`
+     rather than a copied value, because the hue itself is redefined in the
+     light theme below and the alias must follow it there.
+
+     Each hue reads at better than 4.5:1 on every surface and on its own wash,
      since a ladder cell is coloured text on a tint of the same hue. */
-  --ask: #5ec97a;
-  --ask-bg: rgba(94, 201, 122, 0.20);
-  --bid: #f38a80;
-  --bid-bg: rgba(243, 138, 128, 0.18);
+  --hue-red: #f38a80;
+  --hue-red-wash: rgba(243, 138, 128, 0.18);
+  --hue-green: #5ec97a;
+  --hue-green-wash: rgba(94, 201, 122, 0.20);
+  --hue-blue: #7fb2f0;
+  --hue-blue-wash: rgba(127, 178, 240, 0.18);
+  --hue-amber: #e6b155;
+  --hue-amber-wash: rgba(230, 177, 85, 0.20);
+
+  /* Japanese boards colour by direction rather than by warm/cool: buying is
+     red, selling is green. That is the reverse of the Western convention, so
+     it is stated here once rather than left to be inferred from two hex
+     values -- and it is the default rather than the law, because a desk that
+     reads the other convention should not have to edit a stylesheet. */
+  --ask: var(--hue-green);
+  --ask-bg: var(--hue-green-wash);
+  --bid: var(--hue-red);
+  --bid-bg: var(--hue-red-wash);
 
   --accent: #e6b155;
   --ok: #7ed184;
@@ -75,13 +92,25 @@
     --ink-dim: #4e5666;
     --ink-faint: #5f6878;
 
-    /* The same convention, darkened until it carries on white: buying red,
-       selling green. The washes stay tints of those two, and each colour is
-       dark enough to clear the floor sitting on its own wash. */
-    --ask: #12703a;
-    --ask-bg: rgba(18, 112, 58, 0.13);
-    --bid: #b32a1d;
-    --bid-bg: rgba(179, 42, 29, 0.11);
+    /* The same hues, darkened until they carry on white. The washes stay
+       tints of each, and every one is dark enough to clear the floor sitting
+       on its own wash. The two aliases below are restated rather than
+       inherited: a `var()` is resolved against the element it is used on, so
+       --bid picking up this theme's --hue-red is exactly what it does, but
+       naming them here keeps the two palettes symmetrical. */
+    --hue-red: #b32a1d;
+    --hue-red-wash: rgba(179, 42, 29, 0.11);
+    --hue-green: #12703a;
+    --hue-green-wash: rgba(18, 112, 58, 0.13);
+    --hue-blue: #1b58a8;
+    --hue-blue-wash: rgba(27, 88, 168, 0.11);
+    --hue-amber: #8a5d0a;
+    --hue-amber-wash: rgba(138, 93, 10, 0.13);
+
+    --ask: var(--hue-green);
+    --ask-bg: var(--hue-green-wash);
+    --bid: var(--hue-red);
+    --bid-bg: var(--hue-red-wash);
 
     --accent: #8a5d0a;
     --ok: #1a6c2e;
@@ -299,8 +328,14 @@ main#audit-view {
   background: var(--field);
 }
 .side input { position: absolute; opacity: 0; pointer-events: none; }
-.side-buy { border-radius: 3px 0 0 3px; }
-.side-sell { border-radius: 0 3px 3px 0; }
+/* Buy on the right by default, because the depth board puts bids there and a
+   ticket that disagreed with the ladder above it is a click waiting to go the
+   wrong way. `order` rather than DOM order, so one attribute on <html> flips
+   the ticket, the Level 1 quotes and the ladder together. */
+.side-buy { order: 2; border-radius: 0 3px 3px 0; }
+.side-sell { order: 1; border-radius: 3px 0 0 3px; }
+[data-buy-side="left"] .side-buy { order: 1; border-radius: 3px 0 0 3px; }
+[data-buy-side="left"] .side-sell { order: 2; border-radius: 0 3px 3px 0; }
 .side:focus-within { outline: 1px solid var(--accent); }
 
 /* Selection is marked by a class the script sets, rather than by :has(), which
@@ -431,6 +466,15 @@ main#audit-view {
 .quote.bid .quote-price { color: var(--bid); }
 .quote.ask .quote-price { color: var(--ask); }
 .quote.last .quote-price { color: var(--ink); }
+
+/* Level 1 reads in the same direction as the ladder below it: ask, last, bid,
+   with the bid under the ladder's bid column. `order` works on a grid item as
+   it does on a flex one, so the three stay in their own cells either way. */
+.quote.ask { order: 1; }
+.quote.last { order: 2; }
+.quote.bid { order: 3; }
+[data-buy-side="left"] .quote.bid { order: 1; }
+[data-buy-side="left"] .quote.ask { order: 3; }
 
 .quote-qty {
   font-variant-numeric: tabular-nums;

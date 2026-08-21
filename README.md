@@ -126,7 +126,7 @@ http://127.0.0.1:9200/?symbol=7203&live=0     # a static snapshot, no updates
 
 ### The board
 
-**Level 1** heads the right-hand column: best bid, last trade and best offer
+**Level 1** heads the right-hand column: best offer, last trade and best bid
 with their sizes, then the day's statistics — spread, open, high, low, VWAP,
 volume, turnover, trade count, the price limits, and the instrument's tick size
 and board lot.
@@ -143,8 +143,18 @@ right. `OVER` and `UNDER` carry everything resting outside the window, and a
 carry no price. The **rows** control sets how many ticks to show each side of
 the touch.
 
+Everything that has a buying side reads the same way round: **buy on the
+right** — the ticket's Buy button, Level 1's bid, and the ladder's bid column —
+so a click never has to cross the page to agree with the price it came from.
+`board.buy_side` in `config/web.json` moves all three to the left together;
+they are never split, because a ticket that disagreed with the ladder above it
+is a click waiting to go the wrong way.
+
 Colours follow the Japanese convention, which is the reverse of the Western one:
-**buying is red and selling is green**. The board itself is dark or light
+**buying is red and selling is green**. `board.buy_colour` and
+`board.sell_colour` change that — `red`, `green`, `blue` or `amber`, a name
+rather than a value, because each of those is defined for both themes and
+checked against the contrast floor in both. The board itself is dark or light
 according to the machine it is opened on — whatever the operating system or
 browser reports as its preferred colour scheme — and a browser that states no
 preference gets the dark board.
@@ -380,6 +390,14 @@ switches for what a board is allowed to do:
 
 Each is refused server-side, not merely hidden. Set all three to `false` to
 serve a board that can only watch.
+
+`board` is the fourth key, and grants nothing — it is how the page is laid out
+and coloured, served from here rather than chosen per browser so that everyone
+looking at one board reads it the same way round:
+
+```json
+{ "board": { "buy_side": "right", "buy_colour": "red", "sell_colour": "green" } }
+```
 
 ## Where things live
 

@@ -56,6 +56,10 @@
     stream: null,
     pending: null,
     marketControl: false,
+    // Which side of the board the buying side sits on. Every placement that
+    // depends on it is CSS `order` off a <html> attribute, except the ladder,
+    // whose cells are table cells and have to be built in the right sequence.
+    buyRight: true,
     // The ladder's prices, highest first, exactly as the venue formatted them.
     // Stepping the price field walks this rather than doing arithmetic: tick
     // size varies with price, so only the venue can say what the next valid
@@ -199,9 +203,53 @@
         state.audit = payload.allow_audit !== false;
         el["view-toggle"].hidden = !state.audit;
         el["owner-name"].textContent = OWNER;
+        applyBoardLayout(payload.board);
         return loadMarkets();
       })
       .catch(function (error) { fail("cannot list venues: " + error.message); });
+  }
+
+  /* Which side buys, and in what colour. Both come from the server's config so
+   * that everyone opening this board reads it the same way round -- a per-
+   * browser setting would mean two people describing the same screen
+   * differently, which on a trading board is a real hazard.
+   *
+   * The colours are applied by pointing the --bid and --ask aliases at a hue
+   * token rather than at a literal, so each keeps its own value in the light
+   * theme and the contrast the palette guarantees survives the swap. */
+  function applyBoardLayout(board) {
+    board = board || {};
+    state.buyRight = board.buy_side !== "left";
+    document.documentElement.setAttribute(
+      "data-buy-side", state.buyRight ? "right" : "left");
+
+    if (board.buy_colour) {
+      setHue("--bid", board.buy_colour);
+    }
+    if (board.sell_colour) {
+      setHue("--ask", board.sell_colour);
+    }
+
+    // The ladder's header is static markup, so it is the one thing that has to
+    // be reordered by hand; its rows are built to match in renderLadder.
+    if (!state.buyRight) {
+      var header = document.querySelector("table.ita thead tr");
+      if (header) {
+        // Reversed by re-appending, not by moving one cell: insertBefore of
+        // the last cell in front of the first leaves the price column at the
+        // end, which is where it does not belong.
+        Array.prototype.slice.call(header.children).reverse()
+          .forEach(function (th) { header.appendChild(th); });
+      }
+    }
+  }
+
+  function setHue(alias, name) {
+    // A name, not a colour: the server validates it against the palette, and
+    // anything else would let a config write an illegible board.
+    var root = document.documentElement;
+    root.style.setProperty(alias, "var(--hue-" + name + ")");
+    root.style.setProperty(alias + "-bg", "var(--hue-" + name + "-wash)");
   }
 
   function loadMarkets() {
@@ -435,9 +483,7 @@
       }
       tr.className = classes.join(" ");
 
-      cell(tr, "ask-col", qty(row.ask_qty));
-      cell(tr, "price-col", row.price);
-      cell(tr, "bid-col", qty(row.bid_qty));
+      ladderCells(tr, qty(row.ask_qty), row.price, qty(row.bid_qty));
       el.ita.appendChild(tr);
     });
 
@@ -454,15 +500,26 @@
     var tr = document.createElement("tr");
     tr.className = "edge";
     if (side === "ask-col") {
-      cell(tr, "ask-col", value);
-      cell(tr, "price-col", label);
-      cell(tr, "bid-col", "");
+      ladderCells(tr, value, label, "");
     } else {
-      cell(tr, "ask-col", "");
-      cell(tr, "price-col", label);
-      cell(tr, "bid-col", value);
+      ladderCells(tr, "", label, value);
     }
     return tr;
+  }
+
+  /* The one place that knows which way round the ladder runs. The cells keep
+   * their own classes whichever order they are written in, so the colouring,
+   * the best-price markers and the click-to-fill selector are all unaffected. */
+  function ladderCells(tr, ask, price, bid) {
+    if (state.buyRight) {
+      cell(tr, "ask-col", ask);
+      cell(tr, "price-col", price);
+      cell(tr, "bid-col", bid);
+    } else {
+      cell(tr, "bid-col", bid);
+      cell(tr, "price-col", price);
+      cell(tr, "ask-col", ask);
+    }
   }
 
   function tradeRow(trade, isNew) {
