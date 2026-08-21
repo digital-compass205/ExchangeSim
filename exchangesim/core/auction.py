@@ -257,9 +257,9 @@ def _execute_pair(book, buyer, seller, price, trade_ids, when):
     # both are reported as having added it.
     return [
         OrderFilled(buyer, quantity, price, trade_id, Liquidity.ADDED,
-                    seller.order_id),
+                    seller.order_id, seller.mpid),
         OrderFilled(seller, quantity, price, trade_id, Liquidity.ADDED,
-                    buyer.order_id),
+                    buyer.order_id, buyer.mpid),
         TradeExecuted(buyer.symbol, buyer.market, price, quantity, trade_id,
                       buyer.order_id, seller.order_id, None, when),
     ]

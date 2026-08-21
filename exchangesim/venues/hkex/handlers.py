@@ -58,6 +58,10 @@ _BROKER = D.PartyRole.EXECUTING_FIRM
 _BCAN = D.PartyRole.CLIENT_ID
 _LOCATION = D.PartyRole.LOCATION_ID
 
+#: Outbound only: who was on the other side of a trade. Never read from a
+#: client -- an order that named its own counterparty would be nonsense.
+_CONTRA = D.PartyRole.CONTRA_FIRM
+
 
 class HkexApplication(Application):
     """Bridges FIXT.1.1 sessions to the venue engine."""
@@ -555,12 +559,15 @@ class HkexApplication(Application):
 
     # -- execution reports -------------------------------------------------
 
-    def _base_report(self, order, exec_type, ord_status):
+    def _base_report(self, order, exec_type, ord_status, contra_mpid=None):
         message = Message.create(C.EXECUTION_REPORT)
         message.set(D.EXEC_ID, self.exec_ids.next())
         message.set(D.CL_ORD_ID, order.cl_ord_id)
         message.set(D.ORDER_ID, order.order_id)
-        self._set_parties(message, order)
+        # The counterparty goes in here rather than being appended by the
+        # caller: <Parties> is read positionally, so a fourth tag added after
+        # the rest of the message would not be inside the group at all.
+        self._set_parties(message, order, contra_mpid)
         self._set_instrument(message, order.symbol)
         message.set(D.ORD_TYPE, rules.ORD_TYPE_TO_FIX.get(
             order.order_type, D.OrdType.LIMIT))
@@ -583,11 +590,23 @@ class HkexApplication(Application):
             message.set(D.ORIG_CL_ORD_ID, order.orig_cl_ord_id)
         return message
 
-    def _set_parties(self, message, order):
-        """Rebuild the <Parties> block from what the order kept."""
+    def _set_parties(self, message, order, contra_mpid=None):
+        """Rebuild the <Parties> block from what the order kept.
+
+        On a trade the block also names who was on the other side of it:
+        ``PartyRole=17``, Contra Firm, which the binary encoding carries as bit
+        31 of the Execution Report. Hong Kong is a broker-transparent market
+        and both documents define the field for exactly this message, so a
+        client that reconciles its fills against the counterparty broker is
+        entitled to it. It is omitted when there is nobody to name -- an order
+        injected over the control plane carries no Broker ID -- which is what
+        "provided only if applicable" means.
+        """
         entries = []
         if order.mpid:
             entries.append((order.mpid, _BROKER))
+        if contra_mpid:
+            entries.append((contra_mpid, _CONTRA))
         if order.account:
             entries.append((order.account, _BCAN))
         if not entries:
@@ -636,7 +655,8 @@ class HkexApplication(Application):
         status = (D.OrdStatus.FILLED if complete
                   else D.OrdStatus.PARTIALLY_FILLED)
 
-        message = self._base_report(order, D.ExecType.TRADE, status)
+        message = self._base_report(order, D.ExecType.TRADE, status,
+                                    contra_mpid=event.counterparty_mpid)
 
         # Restate the running totals from the event's snapshot: the order has
         # moved on by the time a batch of events is rendered.

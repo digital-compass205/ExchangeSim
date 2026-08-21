@@ -87,6 +87,8 @@ Reach for the Japannext module as a template only after checking these, because 
 
 Repeating groups needed **no codec change**: `Message` keeps fields ordered and offers `get_all`/`append`, so a group is read positionally. What that cannot do is check the count, so `hkex/handlers.py:_check_count` does, rejecting a mismatch with `SessionRejectReason=16`. Any new group needs the same.
 
+Positional also means **a group can only be built where it is built**. `<Parties>` on an Execution Report carries the counterparty's Broker ID on a trade (`PartyRole=17`, bit 31 in binary), and that entry goes in through `_set_parties`, not appended by the caller afterwards — a fourth tag added at the end of the message is not inside the group at all. The value reaches the gateway as `OrderFilled.counterparty_mpid`, snapshotted at match time for the same reason the running totals are.
+
 ### The second encoding
 
 HKEX publishes OCG-C twice, as tag=value FIX and as a fixed-width little-endian binary format, and entitles a Comp ID to one of them. The binary one is a **codec, not a second gateway**: `binary/` turns a frame into the same `fix.Message` everything above it speaks, so the session layer, dictionary validation, handlers, engine, audit, CLI and board are shared and neither encoding knows about the other.

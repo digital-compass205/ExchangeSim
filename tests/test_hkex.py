@@ -489,6 +489,63 @@ class TradingTest(HkexTestCase):
         self.assertEqual(C.NO,
                          self.other.reports()[-1].get(D.AGGRESSOR_INDICATOR))
 
+    def test_a_fill_names_the_counterparty_broker(self):
+        """PartyRole 17, Contra Firm -- the field a real gateway reconciles on.
+
+        Hong Kong is a broker-transparent market and both OCG-C documents put
+        the counterparty's Broker ID on the trade Execution Report, so leaving
+        it out is a gap rather than a simplification.
+        """
+        self.rest("R20")
+
+        self.client.new_order("B20", quantity=100, price="395.800")
+
+        mine = self.client.reports()[-1]
+        theirs = self.other.reports()[-1]
+
+        self.assertEqual(BROKER1_ID, party(mine, D.PartyRole.EXECUTING_FIRM))
+        self.assertEqual(BROKER2_ID, party(mine, D.PartyRole.CONTRA_FIRM))
+        # And the resting side learns who lifted it.
+        self.assertEqual(BROKER2_ID, party(theirs, D.PartyRole.EXECUTING_FIRM))
+        self.assertEqual(BROKER1_ID, party(theirs, D.PartyRole.CONTRA_FIRM))
+
+    def test_only_a_trade_carries_a_counterparty(self):
+        # An acknowledgement has no other side to name, and a client reading
+        # the group positionally must not find one there.
+        self.client.new_order("B21", quantity=100, price="390.000")
+        accepted = self.only()
+
+        self.assertEqual(D.ExecType.NEW, accepted.get(D.EXEC_TYPE))
+        self.assertIsNone(party(accepted, D.PartyRole.CONTRA_FIRM))
+
+    def test_the_counterparty_count_matches_the_group(self):
+        # NoPartyIDs has to grow with the extra entry: a client that trusts the
+        # count would otherwise stop reading before the counterparty.
+        self.rest("R22")
+
+        self.client.new_order("B22", quantity=100, price="395.800")
+        fill = self.client.reports()[-1]
+
+        self.assertEqual(len(fill.get_all(D.PARTY_ID)),
+                         int(fill.get(D.NO_PARTY_IDS)))
+        self.assertEqual(len(fill.get_all(D.PARTY_ROLE)),
+                         int(fill.get(D.NO_PARTY_IDS)))
+
+    def test_a_fill_against_an_injected_order_names_nobody(self):
+        """"Provided only if applicable": a control-plane order has no broker."""
+        self.harness.dispatch("order.new", {
+            "market": "MAIN", "symbol": SYMBOL, "side": "SELL",
+            "quantity": 100, "price": "395.800", "owner": "OPS"})
+        self.client.drain()
+
+        self.client.new_order("B23", quantity=100, price="395.800")
+        fill = self.client.reports()[-1]
+
+        self.assertEqual(D.ExecType.TRADE, fill.get(D.EXEC_TYPE))
+        self.assertIsNone(party(fill, D.PartyRole.CONTRA_FIRM))
+        # Its own broker is still there; only the missing half is missing.
+        self.assertEqual(BROKER1_ID, party(fill, D.PartyRole.EXECUTING_FIRM))
+
     def test_a_partial_fill_reports_its_own_running_totals(self):
         self.rest("R4", quantity=100)
 

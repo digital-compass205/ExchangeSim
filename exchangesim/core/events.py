@@ -69,17 +69,24 @@ class OrderFilled(Event):
     """
 
     __slots__ = ("order", "quantity", "price", "trade_id", "liquidity",
-                 "counterparty_order_id", "cum_qty", "leaves_qty",
-                 "notional_units", "order_qty")
+                 "counterparty_order_id", "counterparty_mpid", "cum_qty",
+                 "leaves_qty", "notional_units", "order_qty")
 
     def __init__(self, order, quantity, price, trade_id, liquidity,
-                 counterparty_order_id=None):
+                 counterparty_order_id=None, counterparty_mpid=None):
         self.order = order
         self.quantity = quantity
         self.price = price
         self.trade_id = trade_id
         self.liquidity = liquidity
+        # Both are snapshots of the other side taken here, for the same reason
+        # the running totals below are: the counterparty order may be filled
+        # again, or gone from the book, before this event is rendered. A venue
+        # whose protocol discloses who it traded with -- HKEX names the
+        # counterparty's Broker ID on every execution -- needs the identity as
+        # it stood at the moment of the match.
         self.counterparty_order_id = counterparty_order_id
+        self.counterparty_mpid = counterparty_mpid
         self.cum_qty = order.cum_qty
         self.leaves_qty = order.leaves_qty
         self.notional_units = order.notional_units

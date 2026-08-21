@@ -208,9 +208,9 @@ class MatchingEngine(object):
 
         return [
             OrderFilled(resting, quantity, price, trade_id, Liquidity.ADDED,
-                        order.order_id),
+                        order.order_id, order.mpid),
             OrderFilled(order, quantity, price, trade_id, Liquidity.REMOVED,
-                        resting.order_id),
+                        resting.order_id, resting.mpid),
             TradeExecuted(order.symbol, order.market, price, quantity, trade_id,
                           buy.order_id, sell.order_id,
                           Side.BUY if order.is_buy else Side.SELL, when),

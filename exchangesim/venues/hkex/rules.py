@@ -317,6 +317,20 @@ ASSUMPTIONS = [
                "for every outbound field, because a client left matching 1 "
                "against 00001 is comparing two spellings of one number"},
 
+    {"topic": "Counterparty Broker ID on a trade",
+     "behaviour": "every trade Execution Report names the broker on the other "
+                  "side -- PartyRole 17 in FIX, bit 31 in the binary encoding "
+                  "-- and omits it only when the counterparty has no Broker "
+                  "ID, which happens for an order injected over the control "
+                  "plane",
+     "alternative": "omit it, or send it only for continuous-trading matches "
+                    "and not for auction ones",
+     "source": "both documents define the field for this message and mark it "
+               "not required, the FIX one adding 'provided only if "
+               "applicable' without saying when that is. Hong Kong is a "
+               "broker-transparent market, so the reading taken here is that "
+               "it applies whenever there is a counterparty broker to name"},
+
     # -- the binary encoding, where it and the FIX one do not simply agree --
 
     {"topic": "binary Gap Fill value",

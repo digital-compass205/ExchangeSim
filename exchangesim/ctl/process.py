@@ -8,6 +8,7 @@ implementations rather than one plus a stub.
 Nothing above this module imports ``signal`` or ``ctypes``.
 """
 
+import contextlib
 import errno
 import os
 import subprocess
@@ -18,6 +19,8 @@ WINDOWS = os.name == "nt"
 # CreateProcess flags. Named here rather than taken from ``subprocess`` so the
 # module imports on POSIX, where those constants do not exist.
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
+_DETACHED_PROCESS = 0x00000008
+_HANDLE_FLAG_INHERIT = 0x00000001
 
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _STILL_ACTIVE = 259
@@ -116,10 +119,10 @@ def spawn(argv, cwd, output_path, env=None):
     # type: (list, str, str, dict) -> int
     """Start a detached background process and return its pid.
 
-    The child outlives this one: on POSIX it gets its own session, so closing
-    the terminal does not take the venue with it. On Windows it gets its own
-    process group -- but *not* DETACHED_PROCESS, because a process with no
-    console cannot be sent the CTRL_BREAK_EVENT that stops it cleanly.
+    The child outlives this one: on POSIX it gets its own session, on Windows
+    its own process group and no console at all. It must also not inherit
+    anything of ours -- see :func:`_no_inherited_handles`, which is the whole
+    difference between `exchangesim start | tail` returning and hanging.
 
     ``output_path`` receives the child's stdout and stderr. That should stay
     almost empty: the daemons log to their own rotated file. What lands here is
@@ -137,14 +140,20 @@ def spawn(argv, cwd, output_path, env=None):
         if env is not None:
             kwargs["env"] = env
         if WINDOWS:
-            kwargs["creationflags"] = _CREATE_NEW_PROCESS_GROUP
+            # DETACHED_PROCESS so the daemon survives its terminal, and no
+            # console means `stop` terminates rather than signalling -- which
+            # request_stop already had to do whenever stop ran from a second
+            # terminal.
+            kwargs["creationflags"] = (_CREATE_NEW_PROCESS_GROUP
+                                       | _DETACHED_PROCESS)
         else:
             # Its own session, so closing the terminal does not take the venue
             # with it. close_fds is POSIX-only here: Python 3.6 on Windows
             # refuses it outright when the standard handles are redirected.
             kwargs["preexec_fn"] = os.setsid
             kwargs["close_fds"] = True
-        child = subprocess.Popen(argv, **kwargs)
+        with _no_inherited_handles():
+            child = subprocess.Popen(argv, **kwargs)
     finally:
         handle.close()
     # The child is deliberately never waited for -- it outlives this process.
@@ -152,6 +161,53 @@ def spawn(argv, cwd, output_path, env=None):
     # controller exits moments later, so nothing accumulates.
     _spawned.append(child)
     return child.pid
+
+
+@contextlib.contextmanager
+def _no_inherited_handles():
+    """Stop a Windows child inheriting *this* process's standard handles.
+
+    Python 3.6 on Windows refuses ``close_fds`` when the standard handles are
+    redirected, and then passes ``bInheritHandles=TRUE`` -- so every inheritable
+    handle we hold goes to the child, the redirection notwithstanding. Run
+    ``exchangesim start | tail`` and the daemon inherits the write end of that
+    pipe; ``tail`` then waits for an EOF that cannot come until the venue exits,
+    which is to say never. It hangs the terminal, and it hung this one twice.
+
+    Clearing the inherit flag on fds 0-2 for the length of the spawn is the
+    narrow fix: the handles the child is *given* are duplicated by
+    CreateProcess and unaffected.
+
+    A no-op everywhere else, where ``close_fds`` does the same job properly.
+    """
+    if not WINDOWS:
+        yield
+        return
+
+    import ctypes
+    import msvcrt
+
+    kernel32 = ctypes.windll.kernel32
+    saved = []
+    for fd in (0, 1, 2):
+        try:
+            handle = msvcrt.get_osfhandle(fd)
+        except (OSError, ValueError):
+            continue
+        flags = ctypes.c_ulong()
+        if not kernel32.GetHandleInformation(
+                ctypes.c_void_p(handle), ctypes.byref(flags)):
+            continue
+        saved.append((handle, flags.value))
+        kernel32.SetHandleInformation(
+            ctypes.c_void_p(handle), _HANDLE_FLAG_INHERIT, 0)
+    try:
+        yield
+    finally:
+        for handle, flags in saved:
+            kernel32.SetHandleInformation(
+                ctypes.c_void_p(handle), _HANDLE_FLAG_INHERIT,
+                flags & _HANDLE_FLAG_INHERIT)
 
 
 def command_line(pid):

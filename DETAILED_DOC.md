@@ -753,6 +753,13 @@ invalid message type rather than a half-answer. Beyond that:
   contradict); `Disclosure Instructions` bit 0 is read as the least significant
   bit of the word; and the Execution Report refusing a cancel for an **unknown**
   order carries no instrument or side, there being no order to describe.
+- the **Counterparty Broker ID** on a trade — `PartyRole=17` in FIX, bit 31 in
+  the binary Execution Report — is sent whenever there is a broker to name.
+  Both documents mark the field not required and the FIX one says only
+  "provided only if applicable" without defining when; Hong Kong is
+  broker-transparent, so the reading here is that it applies to every match
+  with a counterparty broker, auction fills included. An order injected over
+  the control plane has no Broker ID, and then the field is absent.
 - an unfilled IOC, FOK or market-order balance reports `ExecType=C` (Expired)
   rather than 4 (Cancelled); the specification defines both and says which
   applies to neither.

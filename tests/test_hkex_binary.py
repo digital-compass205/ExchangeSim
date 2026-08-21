@@ -300,7 +300,7 @@ class CrossEncodingTest(unittest.TestCase):
         self.assertEqual(binary_fills[0].get(D.ORD_STATUS),
                          D.OrdStatus.FILLED)
 
-    def test_a_fill_names_its_own_broker(self):
+    def test_a_fill_names_both_brokers(self):
         fix_client = self.harness.client(BROKER1)
         binary_client = self.harness.client(BROKER3)
         fix_client.new_order("F2", side=D.SideValue.SELL, quantity=1000,
@@ -310,11 +310,31 @@ class CrossEncodingTest(unittest.TestCase):
 
         fill = [r for r in binary_client.reports()
                 if r.get(D.EXEC_TYPE) == D.ExecType.TRADE][0]
+
         self.assertEqual(party(fill, D.PartyRole.EXECUTING_FIRM), "1003")
-        # Counterparty Broker ID is bit 31 of the binary Execution Report and
-        # PartyRole 17 of the FIX one; this venue populates neither, so the two
-        # encodings stay level with each other.
-        self.assertIsNone(party(fill, D.PartyRole.CONTRA_FIRM))
+        # Counterparty Broker ID: bit 31 of the binary Execution Report, and
+        # PartyRole 17 of the FIX one. Hong Kong is broker-transparent and the
+        # two encodings carry it out of the same <Parties> block, so a client
+        # gets the same answer whichever one it speaks.
+        self.assertEqual(party(fill, D.PartyRole.CONTRA_FIRM), "1001")
+
+    def test_each_side_is_told_the_other_broker(self):
+        fix_client = self.harness.client(BROKER1)
+        binary_client = self.harness.client(BROKER3)
+        fix_client.new_order("F3", side=D.SideValue.SELL, quantity=1000,
+                             price="395.800")
+        fix_client.drain()
+        binary_client.new_order("B3", quantity=1000, price="395.800")
+
+        binary_fill = [r for r in binary_client.reports()
+                       if r.get(D.EXEC_TYPE) == D.ExecType.TRADE][0]
+        fix_fill = [r for r in fix_client.reports()
+                    if r.get(D.EXEC_TYPE) == D.ExecType.TRADE][0]
+
+        # The resting side learns who lifted it, not merely that it was lifted.
+        self.assertEqual(party(fix_fill, D.PartyRole.EXECUTING_FIRM), "1001")
+        self.assertEqual(party(fix_fill, D.PartyRole.CONTRA_FIRM), "1003")
+        self.assertEqual(party(binary_fill, D.PartyRole.CONTRA_FIRM), "1001")
 
 
 class EntitlementTest(unittest.TestCase):
