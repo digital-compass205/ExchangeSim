@@ -8,6 +8,7 @@ re-testing matching, which tests/test_matching.py already owns.
 
 import unittest
 
+from exchangesim.core.config import ConfigError
 from exchangesim.core.enums import StpMode
 from exchangesim.fix import constants as C
 from exchangesim.fix.message import Message
@@ -546,6 +547,70 @@ class TradingTest(HkexTestCase):
         # Its own broker is still there; only the missing half is missing.
         self.assertEqual(BROKER1_ID, party(fill, D.PartyRole.EXECUTING_FIRM))
 
+    def test_an_override_replaces_the_broker_that_actually_traded(self):
+        config = venue_config(counterparty={"override": "7777"})
+        with VenueHarness(config) as harness:
+            client = harness.client(BROKER1)
+            other = harness.client(BROKER2)
+            client.drain()
+            other.drain()
+            other.new_order("R24", side=D.SideValue.SELL, quantity=100,
+                            price="395.800")
+            other.drain()
+
+            client.new_order("B24", quantity=100, price="395.800")
+            fill = client.reports()[-1]
+
+            # A client reconciling against one expected counterparty should
+            # not have to care which session happened to be resting opposite.
+            self.assertEqual("7777", party(fill, D.PartyRole.CONTRA_FIRM))
+            self.assertEqual(BROKER1_ID,
+                             party(fill, D.PartyRole.EXECUTING_FIRM))
+
+    def test_a_default_fills_in_only_where_there_is_no_broker(self):
+        config = venue_config(counterparty={"default": "8888"})
+        with VenueHarness(config) as harness:
+            client = harness.client(BROKER1)
+            other = harness.client(BROKER2)
+            client.drain()
+            other.drain()
+
+            # A real counterparty keeps its own Broker ID.
+            other.new_order("R25", side=D.SideValue.SELL, quantity=100,
+                            price="395.800")
+            other.drain()
+            client.new_order("B25", quantity=100, price="395.800")
+            self.assertEqual(BROKER2_ID,
+                             party(client.reports()[-1],
+                                   D.PartyRole.CONTRA_FIRM))
+
+            # An injected order has none, and the default stands in for it, so
+            # a fill never carries a hole where a counterparty should be.
+            harness.dispatch("order.new", {
+                "market": "MAIN", "symbol": SYMBOL, "side": "SELL",
+                "quantity": 100, "price": "395.800", "owner": "OPS"})
+            client.drain()
+            client.new_order("B26", quantity=100, price="395.800")
+
+            self.assertEqual("8888", party(client.reports()[-1],
+                                           D.PartyRole.CONTRA_FIRM))
+
+    def test_an_override_covers_an_injected_order_too(self):
+        config = venue_config(counterparty={"default": "8888",
+                                            "override": "7777"})
+        with VenueHarness(config) as harness:
+            client = harness.client(BROKER1)
+            client.drain()
+            harness.dispatch("order.new", {
+                "market": "MAIN", "symbol": SYMBOL, "side": "SELL",
+                "quantity": 100, "price": "395.800", "owner": "OPS"})
+            client.drain()
+
+            client.new_order("B27", quantity=100, price="395.800")
+
+            self.assertEqual("7777", party(client.reports()[-1],
+                                           D.PartyRole.CONTRA_FIRM))
+
     def test_a_partial_fill_reports_its_own_running_totals(self):
         self.rest("R4", quantity=100)
 
@@ -975,6 +1040,70 @@ class ControlPlaneTest(HkexTestCase):
 
         self.assertEqual(D.ExecType.TRADE, report.get(D.EXEC_TYPE))
         self.assertEqual("100", report.get(D.LAST_QTY))
+
+
+class CounterpartyConfigTest(unittest.TestCase):
+    """What ``counterparty`` may say, and how it resolves."""
+
+    def _venue(self, section):
+        harness = VenueHarness(venue_config(counterparty=section))
+        self.addCleanup(harness.close)
+        return harness.venue
+
+    def test_unset_reports_whoever_traded_and_nobody_otherwise(self):
+        venue = self._venue(None)
+
+        self.assertEqual("1001", venue.contra_broker("1001"))
+        self.assertIsNone(venue.contra_broker(None))
+
+    def test_a_default_stands_in_only_for_a_missing_broker(self):
+        venue = self._venue({"default": "8888"})
+
+        self.assertEqual("1001", venue.contra_broker("1001"))
+        self.assertEqual("8888", venue.contra_broker(None))
+
+    def test_an_override_displaces_every_broker(self):
+        venue = self._venue({"override": "7777"})
+
+        self.assertEqual("7777", venue.contra_broker("1001"))
+        self.assertEqual("7777", venue.contra_broker(None))
+
+    def test_an_override_wins_over_a_default(self):
+        venue = self._venue({"default": "8888", "override": "7777"})
+
+        self.assertEqual("7777", venue.contra_broker(None))
+
+    def test_explicit_nulls_are_the_same_as_saying_nothing(self):
+        venue = self._venue({"default": None, "override": None})
+
+        self.assertIsNone(venue.contra_broker(None))
+
+    def test_a_broker_id_must_be_a_string(self):
+        with self.assertRaises(ConfigError):
+            self._venue({"default": 8888})
+
+    def test_a_blank_broker_id_is_refused(self):
+        # "" would silently mean "no counterparty", which null already says.
+        with self.assertRaises(ConfigError) as caught:
+            self._venue({"override": "   "})
+        self.assertIn("null", str(caught.exception))
+
+    def test_a_broker_id_too_long_for_the_binary_field_is_refused(self):
+        # It would reach a binary client truncated and a FIX client whole:
+        # one identifier with two spellings, which is what this setting is
+        # meant to remove.
+        with self.assertRaises(ConfigError) as caught:
+            self._venue({"default": "1234567890123456"})
+        self.assertIn("binary", str(caught.exception))
+
+    def test_a_misspelt_key_is_refused_rather_than_ignored(self):
+        with self.assertRaises(ConfigError) as caught:
+            self._venue({"defualt": "8888"})
+        self.assertIn("defualt", str(caught.exception))
+
+    def test_the_section_must_be_an_object(self):
+        with self.assertRaises(ConfigError):
+            self._venue("8888")
 
 
 class RulesTest(unittest.TestCase):

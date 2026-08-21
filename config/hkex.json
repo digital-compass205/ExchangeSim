@@ -80,6 +80,11 @@
     "aggression_spreads": 9
   },
 
+  "counterparty": {
+    "default": "8888",
+    "override": null
+  },
+
   "tape_length": 500,
 
   "_notes": [
@@ -104,6 +109,15 @@
     "Broker ID listed here, each entitled to Trade and not to Make Markets --",
     "quoting is not implemented. A session with none configured is answered",
     "with RequestResult 2, no data found.",
+    "",
+    "'counterparty' controls the Counterparty Broker ID on a trade report --",
+    "PartyRole 17 in FIX, bit 31 in the binary encoding. 'default' is the",
+    "Broker ID to name when the other side of the match has none, which is",
+    "the case for an order injected over the control plane; with it set, a",
+    "fill always carries a counterparty. 'override' displaces the real one on",
+    "every trade, for a client that reconciles against a single expected",
+    "counterparty and should not care which session was resting opposite.",
+    "Set both to null to report only whoever actually traded.",
     "",
     "'smp' pre-registers SelfMatchPreventionID(2362) instructions, which the",
     "real exchange holds out of band. Add more at runtime with the",

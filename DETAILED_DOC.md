@@ -282,6 +282,22 @@ book the order reaches. `smp` pre-registers the self-match prevention
 instructions the real exchange holds against each `SelfMatchPreventionID` out of
 band; `smp.register` adds more at runtime.
 
+`counterparty` decides what the Counterparty Broker ID on a trade report says:
+
+```json
+{ "counterparty": { "default": "8888", "override": null } }
+```
+
+A real match names the broker that actually traded. `default` is what to name
+when the other side has none -- an order injected over the control plane names
+no Exchange Participant -- so with it set, every fill carries a counterparty.
+`override` displaces the real one on every trade, which is for a client under
+test that reconciles against one expected counterparty and should not have to
+care which session was resting opposite. Both null reports only who really
+traded, and omits the field when that is nobody. A Broker ID longer than the
+binary encoding's field is refused at startup rather than reaching a binary
+client truncated and a FIX client whole.
+
 A session states which of the venue's two encodings it speaks, and connects to
 that encoding's port:
 
@@ -759,7 +775,10 @@ invalid message type rather than a half-answer. Beyond that:
   "provided only if applicable" without defining when; Hong Kong is
   broker-transparent, so the reading here is that it applies to every match
   with a counterparty broker, auction fills included. An order injected over
-  the control plane has no Broker ID, and then the field is absent.
+  the control plane has no Broker ID; `counterparty.default` names the broker
+  to report in its place, so a fill need never carry a hole, and
+  `counterparty.override` reports one fixed broker on every trade for a client
+  that reconciles against a single expected counterparty.
 - an unfilled IOC, FOK or market-order balance reports `ExecType=C` (Expired)
   rather than 4 (Cancelled); the specification defines both and says which
   applies to neither.

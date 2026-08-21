@@ -87,7 +87,7 @@ Reach for the Japannext module as a template only after checking these, because 
 
 Repeating groups needed **no codec change**: `Message` keeps fields ordered and offers `get_all`/`append`, so a group is read positionally. What that cannot do is check the count, so `hkex/handlers.py:_check_count` does, rejecting a mismatch with `SessionRejectReason=16`. Any new group needs the same.
 
-Positional also means **a group can only be built where it is built**. `<Parties>` on an Execution Report carries the counterparty's Broker ID on a trade (`PartyRole=17`, bit 31 in binary), and that entry goes in through `_set_parties`, not appended by the caller afterwards — a fourth tag added at the end of the message is not inside the group at all. The value reaches the gateway as `OrderFilled.counterparty_mpid`, snapshotted at match time for the same reason the running totals are.
+Positional also means **a group can only be built where it is built**. `<Parties>` on an Execution Report carries the counterparty's Broker ID on a trade (`PartyRole=17`, bit 31 in binary), and that entry goes in through `_set_parties`, not appended by the caller afterwards — a fourth tag added at the end of the message is not inside the group at all. The value reaches the gateway as `OrderFilled.counterparty_mpid`, snapshotted at match time for the same reason the running totals are, and passes through `HkexVenue.contra_broker`, where `counterparty.default` covers a match whose other side has no Broker ID (a control-plane order) and `counterparty.override` reports one fixed broker on every trade.
 
 ### The second encoding
 

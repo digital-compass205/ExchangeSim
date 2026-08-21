@@ -134,6 +134,11 @@ class HkexVenue(Venue):
         #: SelfMatchPreventionID(2362) -> core StpMode, registered out of band
         #: exactly as HKEX registers it against the ID. See rules.ASSUMPTIONS.
         self.smp_instructions = {}
+        #: Counterparty Broker ID on a trade report, when the match itself does
+        #: not supply one and when the config insists on one regardless. See
+        #: :meth:`contra_broker`.
+        self.counterparty_default = None
+        self.counterparty_override = None
         #: market name -> the AuctionSession running there, if any.
         self.auctions = {}
         self.markets = {}
@@ -155,6 +160,7 @@ class HkexVenue(Venue):
     def setup(self):
         self._load_reference_data()
         self._load_smp_registry()
+        self._load_counterparty()
         self._build_markets()
         self._build_engine()
         self._build_fix()
@@ -349,6 +355,44 @@ class HkexVenue(Venue):
             return None
         bare = value.lstrip("0")
         return bare if bare in self.segments else None
+
+    # -- counterparty broker -----------------------------------------------
+
+    def _load_counterparty(self):
+        section = self.config.get("counterparty")
+        if section is None:
+            return
+        if not isinstance(section, dict):
+            raise ConfigError("'counterparty' must be an object")
+        unknown = sorted(set(section) - {"default", "override"})
+        if unknown:
+            raise ConfigError(
+                "counterparty: unknown key(s) %s -- expected 'default' "
+                "and 'override'" % ", ".join(unknown))
+        self.counterparty_default = _broker_id(section.get("default"),
+                                               "counterparty.default")
+        self.counterparty_override = _broker_id(section.get("override"),
+                                                "counterparty.override")
+
+    def contra_broker(self, matched):
+        """The Broker ID to report as the counterparty of a trade.
+
+        A real exchange always has a broker on the other side, so the venue
+        should be able to say one too -- but the *simulator* can match against
+        an order that has none, because an order injected over the control
+        plane names no Exchange Participant. ``counterparty.default`` is the
+        broker to name in that case, so a client's fills never carry a hole.
+
+        ``counterparty.override`` displaces the real one on every trade, which
+        is for a client under test that reconciles against a single expected
+        counterparty and should not have to care which of the simulator's
+        sessions happened to be resting on the other side.
+
+        With neither set, the field carries whoever actually traded and is
+        omitted when that is nobody -- which is what the specification's
+        "provided only if applicable" allows.
+        """
+        return self.counterparty_override or matched or self.counterparty_default
 
     # -- self-match prevention ---------------------------------------------
 
@@ -748,3 +792,26 @@ class HkexVenue(Venue):
             "sessions": len(self.manager.sessions) if self.manager else 0,
         })
         return summary
+
+
+def _broker_id(value, key):
+    """A configured Broker ID, or None. Validated against the binary field.
+
+    The binary encoding writes a Broker ID into a fixed 12-byte field that
+    truncates silently, so an over-long value would reach a binary client
+    shortened and a FIX client whole -- one identifier with two spellings,
+    which is exactly the confusion this setting exists to remove.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ConfigError("%s must be a string" % key)
+    broker = value.strip()
+    if not broker:
+        raise ConfigError("%s must not be blank; use null to leave it unset"
+                          % key)
+    limit = binary_layouts.BROKER_ID.capacity
+    if len(broker) > limit:
+        raise ConfigError("%s is %d characters; a Broker ID must fit the "
+                          "binary encoding's %d" % (key, len(broker), limit))
+    return broker

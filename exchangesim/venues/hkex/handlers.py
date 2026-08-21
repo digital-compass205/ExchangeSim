@@ -655,8 +655,12 @@ class HkexApplication(Application):
         status = (D.OrdStatus.FILLED if complete
                   else D.OrdStatus.PARTIALLY_FILLED)
 
-        message = self._base_report(order, D.ExecType.TRADE, status,
-                                    contra_mpid=event.counterparty_mpid)
+        # Through the venue, not straight off the event: the config decides
+        # whether a match with no broker on the other side still names one,
+        # and whether every trade names the same one.
+        message = self._base_report(
+            order, D.ExecType.TRADE, status,
+            contra_mpid=self.venue.contra_broker(event.counterparty_mpid))
 
         # Restate the running totals from the event's snapshot: the order has
         # moved on by the time a batch of events is rendered.

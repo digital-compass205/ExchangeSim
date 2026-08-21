@@ -324,7 +324,10 @@ ASSUMPTIONS = [
                   "ID, which happens for an order injected over the control "
                   "plane",
      "alternative": "omit it, or send it only for continuous-trading matches "
-                    "and not for auction ones",
+                    "and not for auction ones. 'counterparty.default' in the "
+                    "venue config names a broker to stand in where the match "
+                    "supplies none, and 'counterparty.override' reports one "
+                    "fixed broker on every trade",
      "source": "both documents define the field for this message and mark it "
                "not required, the FIX one adding 'provided only if "
                "applicable' without saying when that is. Hong Kong is a "
