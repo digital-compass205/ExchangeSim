@@ -83,6 +83,7 @@ Reach for the Japannext module as a template only after checking these, because 
 | Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` |
 | Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` |
 | Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message |
+| Acknowledgement | only for an order that rests untraded | **before** matching -- `Market(ack_on_entry=True)` |
 | Encodings | tag=value FIX | tag=value FIX **and** binary, one port each, one session table |
 
 Repeating groups needed **no codec change**: `Message` keeps fields ordered and offers `get_all`/`append`, so a group is read positionally. What that cannot do is check the count, so `hkex/handlers.py:_check_count` does, rejecting a mismatch with `SessionRejectReason=16`. Any new group needs the same.
@@ -159,7 +160,9 @@ which is therefore rebuilt from fields rather than echoed from the raw bytes.
 
 These caused real bugs and are easy to reintroduce.
 
-**Events are produced as a batch, then rendered.** By render time the order has moved on. `OrderFilled` therefore snapshots `cum_qty`, `leaves_qty`, `notional_units` and `order_qty` at construction, and `_render_filled` restates them over whatever `_base_report` derived from the live order. Without this an IOC's partial fill reports `LeavesQty=0` (its post-cancellation value) and every fill of a multi-level sweep reports the final average price rather than its own running one. Any new event that carries running totals needs the same treatment.
+**Events are produced as a batch, then rendered.** By render time the order has moved on. `OrderFilled` therefore snapshots `cum_qty`, `leaves_qty`, `notional_units` and `order_qty` at construction, and `_render_filled` restates them over whatever `_base_report` derived from the live order. Without this an IOC's partial fill reports `LeavesQty=0` (its post-cancellation value) and every fill of a multi-level sweep reports the final average price rather than its own running one. `OrderAccepted` snapshots for the same reason wherever a venue acknowledges before matching. Any new event that carries running totals needs the same treatment.
+
+**Whether an acceptance precedes the executions is a venue answer, not a FIX one.** Japannext reports Order Accepted only for an order that reaches the book untraded, so an order filled on entry is described once. HKEX acknowledges first and executes after -- its own flows show `ExecType=New, CumQty=0, LeavesQty=OrderQty` ahead of the fills (FIX 3.12 §6.6.1, §6.13.1) -- so `MatchingEngine.ack_on_entry` carries it, off by default, on for HKEX markets via `rules.ACK_BEFORE_EXECUTION`. The case that matters is an IOC that never rests: without the acknowledgement its expiry report is the first the client hears of the order, naming an `OrderID` it was never given, and a real gateway rejected exactly that. Emit the acceptance in one place only -- with the flag on, `_rest` must not repeat it for the remainder.
 
 **A book change is not the same thing as an event, and market data must be told about both.** `Market._absorb` publishes `book:` off the event batch, which is right for a submit or a cancel and wrong for an amend: reducing a quantity produces no event at all, and re-entry after a price change filters its `OrderAccepted` out — so the board kept showing the old size until `amend` began passing `changed=True`. Any future path that reaches into a book without producing an event needs the same flag.
 

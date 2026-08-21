@@ -623,7 +623,15 @@ class HkexApplication(Application):
         message.set(D.SECURITY_EXCHANGE, D.SECURITY_EXCHANGE_VALUE)
 
     def _render_accepted(self, event):
-        return self._base_report(event.order, D.ExecType.NEW, D.OrdStatus.NEW)
+        message = self._base_report(event.order, D.ExecType.NEW,
+                                    D.OrdStatus.NEW)
+        # Restate the totals from the event's snapshot. The acceptance is sent
+        # before the order is matched, but it is rendered afterwards, and the
+        # documented report is CumQty 0 with the whole quantity still open.
+        message.set(D.ORDER_QTY, event.order_qty)
+        message.set(D.CUM_QTY, event.cum_qty)
+        message.set(D.LEAVES_QTY, event.leaves_qty)
+        return message
 
     def _render_rejected(self, event):
         order = event.order

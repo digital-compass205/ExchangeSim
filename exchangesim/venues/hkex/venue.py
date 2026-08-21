@@ -461,6 +461,10 @@ class HkexVenue(Venue):
                 clock=self.clock,
                 stp_mode=stp_mode,
                 initial_state=state,
+                # OCG-C acknowledges an order before it matches it, so an
+                # aggressive order that trades on entry is still reported New
+                # first.
+                ack_on_entry=rules.ACK_BEFORE_EXECUTION,
                 publisher=self.publisher,
                 tape_length=self.config.get("tape_length", 500),
                 description=entry.get(

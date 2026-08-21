@@ -54,11 +54,13 @@ class MatchingEngine(object):
     every instrument in a market.
     """
 
-    def __init__(self, codec, trade_ids, clock=None, stp_mode=StpMode.NONE):
+    def __init__(self, codec, trade_ids, clock=None, stp_mode=StpMode.NONE,
+                 ack_on_entry=False):
         self.codec = codec
         self.trade_ids = trade_ids
         self.clock = clock
         self.stp_mode = stp_mode
+        self.ack_on_entry = ack_on_entry
 
     # -- entry point -------------------------------------------------------
 
@@ -76,8 +78,10 @@ class MatchingEngine(object):
                 order, RejectReason.POST_ONLY_WOULD_CROSS,
                 "post-only order would remove liquidity")]
 
+        acknowledged = self._acknowledge(order, events)
+
         if not allow_matching:
-            return self._rest(book, order, events)
+            return self._rest(book, order, events, acknowledged)
 
         blocked = self._precheck(order, book, events)
         if blocked:
@@ -101,7 +105,7 @@ class MatchingEngine(object):
                     order, CancelReason.IOC_REMAINDER,
                     "unfilled remainder cancelled"))
             else:
-                self._rest(book, order, events)
+                self._rest(book, order, events, acknowledged)
         elif order.status not in OrderStatus.TERMINAL:
             order.status = OrderStatus.FILLED
 
@@ -216,20 +220,38 @@ class MatchingEngine(object):
                           Side.BUY if order.is_buy else Side.SELL, when),
         ]
 
-    def _rest(self, book, order, events):
-        """Put the remainder on the book.
+    def _acknowledge(self, order, events):
+        """Report the acceptance before anything is matched, if the venue does.
 
-        An acceptance is reported only for an order that has not traded. The
-        specification defines the Order Accepted report as carrying CumQty 0
-        and LeavesQty equal to OrderQty, so an order that partially filled on
-        entry must not also produce one -- its partial-fill report already
-        carries the resting quantity in LeavesQty.
+        Two venues answer this differently and both readings are defensible, so
+        it is a matching-engine setting rather than a rule.
+
+        With ``ack_on_entry`` off, an acceptance is reported only for an order
+        that reaches the book untraded: the Order Accepted report carries
+        CumQty 0 and LeavesQty equal to OrderQty, so an order that filled on
+        entry would have to be described twice, and its execution report
+        already carries the resting quantity in LeavesQty.
+
+        With it on, every order the market accepts is acknowledged first and
+        its executions follow -- which is what HKEX's own message flows show
+        (FIX 3.12 sections 6.6.1 and 6.13.1): an aggressive order that trades
+        immediately still gets ``ExecType=New, CumQty=0, LeavesQty=OrderQty``
+        ahead of its fills. Without it, a client whose IOC never rests learns
+        of the order for the first time in a report that expires it.
         """
+        if not self.ack_on_entry:
+            return False
+        order.status = OrderStatus.NEW
+        events.append(OrderAccepted(order))
+        return True
+
+    def _rest(self, book, order, events, acknowledged=False):
+        """Put the remainder on the book."""
         already_traded = order.cum_qty > 0
         order.status = (OrderStatus.PARTIALLY_FILLED if already_traded
                         else OrderStatus.NEW)
         book.add(order)
-        if not already_traded:
+        if not already_traded and not acknowledged:
             events.append(OrderAccepted(order))
         return events
 

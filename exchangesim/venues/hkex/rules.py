@@ -104,13 +104,29 @@ STATUS_TO_FIX = {
     OrderStatus.REPLACED: D.OrdStatus.NEW,
 }
 
+# -- acknowledgement before execution -----------------------------------------
+#
+# OCG-C reports an order accepted before it matches it. The message flows are
+# explicit about it: an aggressive New Order that trades on entry is answered
+# with ExecType(150)=New, OrdStatus(39)=New, CumQty(14)=0 and LeavesQty(151)
+# equal to OrderQty, and only then with its executions (FIX 3.12 sections 6.6.1
+# "Order Handling" and 6.13.1 "SMP Handling for Order"; Binary 3.2 section
+# 6.14.1 shows the same sequence).
+#
+# It matters most for an order that never rests. Without the acknowledgement, a
+# client whose IOC finds no liquidity hears of the order for the first time in
+# the report that expires it -- an Execution Report naming an OrderID it has
+# never been given.
+
+ACK_BEFORE_EXECUTION = True
+
 # -- cancels that report as expiry -------------------------------------------
 #
-# ASSUMPTION: the specification defines both "Order Cancelled Unsolicited"
-# (ExecType 4) and "Order Expired" (ExecType C) but does not say which applies
-# to an unfilled IOC/FOK balance or a market order's remainder. FIX 5.0
-# semantics reserve Expired for an order that ran out of time or of book, which
-# is exactly these, so they report as C and everything else as 4.
+# Confirmed, section 6.6: an IOC's remainder is "immediately expired", a FOK
+# that cannot fill in full is "immediately expired", and a market order's
+# remainder "will be expired". Those are the Order Expired report of section
+# 7.7.7.5 -- ExecType(150)=C, OrdStatus(39)=C, the reason in RejectText(1328).
+# Every other unsolicited removal is an Order Cancelled, ExecType 4.
 
 EXPIRING_CANCEL_REASONS = frozenset((
     CancelReason.IOC_REMAINDER,
@@ -263,13 +279,6 @@ ASSUMPTIONS = [
                     "±10% move against the last trade five minutes prior",
      "source": "deliberate: VCM needs a wall-clock timer, and market phases "
                "here are command-driven so that CI never waits"},
-    {"topic": "expiry versus cancellation",
-     "behaviour": "an unfilled IOC, FOK or market-order balance reports "
-                  "ExecType(150)=C (Expired); every other unsolicited removal "
-                  "reports 4 (Cancelled)",
-     "alternative": "ExecType 4 throughout",
-     "source": "the specification defines both reports but does not say which "
-               "covers an unfilled balance"},
     {"topic": "self-match prevention instruction",
      "behaviour": "the instruction is held per SMP ID by the venue -- set it "
                   "with the 'smp.register' control command -- and defaults to "

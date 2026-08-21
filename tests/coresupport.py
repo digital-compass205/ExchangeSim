@@ -68,8 +68,9 @@ class OrderFactory(object):
         return self(Side.SELL, quantity, price, **kwargs)
 
 
-def make_engine(stp_mode=StpMode.NONE, codec=CODEC):
-    return MatchingEngine(codec, IdGenerator("T", width=6), stp_mode=stp_mode)
+def make_engine(stp_mode=StpMode.NONE, codec=CODEC, ack_on_entry=False):
+    return MatchingEngine(codec, IdGenerator("T", width=6), stp_mode=stp_mode,
+                          ack_on_entry=ack_on_entry)
 
 
 def make_book(symbol="7203", market="DAY"):

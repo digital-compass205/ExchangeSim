@@ -117,7 +117,42 @@ the word "HKEX".
 | Auctions | none — the rules say so outright | POS and CAS |
 | Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)` |
 | Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message |
+| Acknowledgement | only for an order that reaches the book untraded | **before** matching: every accepted order is reported New first, then its executions |
 | Encodings | tag=value FIX | tag=value FIX **and** a binary encoding of the same protocol, on separate ports |
+
+### Acknowledgement before execution
+
+The two venues answer a question the FIX standard leaves open: when an
+aggressive order trades the moment it arrives, is it also reported *accepted*?
+
+Japannext's Order Accepted report describes an order that reached the book
+untraded — `CumQty` 0, `LeavesQty` equal to `OrderQty` — so an order that filled
+on entry would have to be described twice and is not: its execution report
+already carries the resting quantity.
+
+HKEX answers the other way, and its message flows are explicit (FIX 3.12
+sections 6.6.1 and 6.13.1, Binary 3.2 section 6.14.1): a New Order that trades
+immediately is answered with `ExecType=New, OrdStatus=New, CumQty=0,
+LeavesQty=OrderQty`, and only then with its fills. It matters most for an order
+that never rests. Without the acknowledgement, a client whose IOC finds no
+liquidity hears of the order for the first time in the report that expires it —
+an Execution Report naming an `OrderID` it has never been given, which is
+exactly what a real gateway rejected as unrecognised.
+
+So it is a matching-engine setting, `MatchingEngine.ack_on_entry`, off by
+default and switched on per market — `rules.ACK_BEFORE_EXECUTION` for HKEX.
+Two consequences are worth naming:
+
+* **One acceptance per order, never two.** With the flag on, the acceptance is
+  emitted on entry and `_rest` does not repeat it for whatever remains; with it
+  off, `_rest` is the only place that emits one. An amendment that re-enters the
+  book filters it out either way — the order was acknowledged when it arrived.
+* **`OrderAccepted` snapshots its totals**, the same treatment `OrderFilled`
+  needs and for the same reason: the acceptance is produced ahead of the fills
+  in one batch and rendered after them, by which time the order has traded.
+
+A rejected order is not acknowledged: the report means the market accepted the
+order, not that the gateway received it.
 
 ### One protocol, two encodings
 
@@ -779,9 +814,6 @@ invalid message type rather than a half-answer. Beyond that:
   to report in its place, so a fill need never carry a hole, and
   `counterparty.override` reports one fixed broker on every trade for a client
   that reconciles against a single expected counterparty.
-- an unfilled IOC, FOK or market-order balance reports `ExecType=C` (Expired)
-  rather than 4 (Cancelled); the specification defines both and says which
-  applies to neither.
 - a limit price may reach **9 spreads** through the opposite best, which is the
   *enhanced* limit order allowance. OCG-C distinguishes a plain limit order by
   `MaxPriceLevels(1090)=1`, which this venue accepts and ignores, so it never

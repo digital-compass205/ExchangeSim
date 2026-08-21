@@ -266,6 +266,104 @@ class TimeInForceTest(unittest.TestCase):
         self.assertEqual(0, incoming.cum_qty)
 
 
+class AcknowledgementTest(unittest.TestCase):
+    """Whether an acceptance precedes the executions, which venues differ on.
+
+    Off, the acceptance describes an order that reached the book untraded.
+    On, every order the market accepts is acknowledged first -- which is what
+    HKEX's OCG-C does, and what a client needs before it can be told its IOC
+    expired.
+    """
+
+    def setUp(self):
+        self.book = make_book()
+        self.order = OrderFactory()
+
+    def test_by_default_an_order_that_trades_on_entry_is_not_acknowledged(self):
+        engine = make_engine()
+        engine.submit(self.book, self.order.sell(100, "2846"))
+
+        events = engine.submit(self.book, self.order.buy(100, "2846"))
+
+        self.assertNotIn("OrderAccepted", [e.name for e in events])
+
+    def test_by_default_a_dead_IOC_produces_only_its_cancellation(self):
+        engine = make_engine()
+
+        events = engine.submit(
+            self.book, self.order.buy(100, "2846", tif=TimeInForce.IOC))
+
+        self.assertEqual(["OrderCancelled"], [e.name for e in events])
+
+    def test_acknowledging_on_entry_puts_the_acceptance_before_the_fills(self):
+        engine = make_engine(ack_on_entry=True)
+        engine.submit(self.book, self.order.sell(100, "2846"))
+
+        events = engine.submit(self.book, self.order.buy(300, "2846"))
+
+        self.assertEqual(["OrderAccepted", "OrderFilled", "OrderFilled",
+                          "TradeExecuted"],
+                         [e.name for e in events],
+                         "one acceptance per order: the remainder that rests "
+                         "was covered by the acceptance it already had")
+
+    def test_the_acceptance_carries_the_totals_from_before_the_match(self):
+        engine = make_engine(ack_on_entry=True)
+        engine.submit(self.book, self.order.sell(100, "2846"))
+
+        events = engine.submit(self.book, self.order.buy(100, "2846"))
+        accepted = events_of(events, "OrderAccepted")[0]
+
+        self.assertEqual(0, accepted.cum_qty)
+        self.assertEqual(100, accepted.leaves_qty)
+        self.assertEqual(100, accepted.order_qty)
+        self.assertEqual(OrderStatus.FILLED, accepted.order.status,
+                         "the order itself has moved on, which is the point")
+
+    def test_a_dead_IOC_is_acknowledged_then_cancelled(self):
+        engine = make_engine(ack_on_entry=True)
+
+        events = engine.submit(
+            self.book, self.order.buy(100, "2846", tif=TimeInForce.IOC))
+
+        self.assertEqual(["OrderAccepted", "OrderCancelled"],
+                         [e.name for e in events])
+
+    def test_an_unfillable_FOK_is_acknowledged_then_cancelled(self):
+        engine = make_engine(ack_on_entry=True)
+
+        events = engine.submit(
+            self.book, self.order.buy(100, "2846", tif=TimeInForce.FOK))
+
+        self.assertEqual(["OrderAccepted", "OrderCancelled"],
+                         [e.name for e in events])
+
+    def test_a_resting_order_is_acknowledged_exactly_once(self):
+        engine = make_engine(ack_on_entry=True)
+
+        events = engine.submit(self.book, self.order.buy(100, "2845.5"))
+
+        self.assertEqual(["OrderAccepted"], [e.name for e in events])
+
+    def test_an_accumulated_order_is_acknowledged_exactly_once(self):
+        engine = make_engine(ack_on_entry=True)
+
+        events = engine.submit(self.book, self.order.buy(100, "2845.5"),
+                               allow_matching=False)
+
+        self.assertEqual(["OrderAccepted"], [e.name for e in events])
+
+    def test_a_post_only_rejection_is_not_acknowledged(self):
+        engine = make_engine(ack_on_entry=True)
+        engine.submit(self.book, self.order.sell(100, "2846"))
+
+        events = engine.submit(
+            self.book,
+            self.order.buy(100, "2846", exec_inst=frozenset([ExecInst.POST_ONLY])))
+
+        self.assertEqual(["OrderRejected"], [e.name for e in events])
+
+
 class PostOnlyTest(unittest.TestCase):
 
     def setUp(self):

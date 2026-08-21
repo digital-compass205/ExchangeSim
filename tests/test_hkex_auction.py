@@ -131,6 +131,39 @@ class SessionLifecycleTest(AuctionTestCase):
             self.lock()
 
 
+class AcknowledgementTest(AuctionTestCase):
+    """An order accumulated by a call auction is still acknowledged once.
+
+    The auction path accumulates without matching, so the acceptance has to
+    come from one place or the other -- never both.
+    """
+
+    def test_an_order_entered_into_the_auction_is_acknowledged_once(self):
+        self.open_pos()
+        self.drain_all()
+
+        self.buy("PA1", 100, "395.800")
+        reports = self.client.reports()
+
+        self.assertEqual(1, len(reports))
+        self.assertEqual(D.ExecType.NEW, reports[0].get(D.EXEC_TYPE))
+        self.assertEqual("100", reports[0].get(D.LEAVES_QTY))
+
+    def test_an_auction_fill_follows_the_acknowledgement_it_already_had(self):
+        self.open_pos()
+        self.drain_all()
+        self.buy("PA2", 100, "395.800")
+        self.sell("PA3", 100, "395.800")
+        self.drain_all()
+
+        self.lock()
+        self.close_to("OPEN")
+
+        reports = self.client.reports()
+        self.assertEqual([D.ExecType.TRADE],
+                         [report.get(D.EXEC_TYPE) for report in reports])
+
+
 class ReferencePriceTest(AuctionTestCase):
 
     def test_the_pre_opening_session_anchors_on_the_previous_close(self):

@@ -651,6 +651,90 @@ class TradingTest(HkexTestCase):
 
         self.assertEqual(D.ExecType.EXPIRED, report.get(D.EXEC_TYPE))
 
+    def test_an_order_that_trades_on_entry_is_acknowledged_first(self):
+        """OCG-C acknowledges, then executes -- FIX 3.12 section 6.6.1.
+
+        The acceptance describes the order as the market received it, so its
+        totals are the entry ones even though the fill that follows was
+        produced in the same batch and has already moved them on.
+        """
+        self.rest("R30", quantity=100)
+
+        self.client.new_order("B30", side=D.SideValue.BUY, quantity=100,
+                              price="395.800")
+        accepted, filled = self.client.reports()
+
+        self.assertEqual(D.ExecType.NEW, accepted.get(D.EXEC_TYPE))
+        self.assertEqual(D.OrdStatus.NEW, accepted.get(D.ORD_STATUS))
+        self.assertEqual("0", accepted.get(D.CUM_QTY))
+        self.assertEqual("100", accepted.get(D.LEAVES_QTY))
+        self.assertEqual("100", accepted.get(D.ORDER_QTY))
+
+        self.assertEqual(D.ExecType.TRADE, filled.get(D.EXEC_TYPE))
+        self.assertEqual("0", filled.get(D.LEAVES_QTY))
+
+    def test_an_IOC_that_finds_nothing_is_acknowledged_before_it_expires(self):
+        """The case a real client rejected: an order it was never told about.
+
+        With no acknowledgement the expiry report is the first the client hears
+        of the order, naming an OrderID it has never been given.
+        """
+        self.client.new_order("B31", quantity=100, price="393.000",
+                              tif=D.TimeInForce.IOC)
+        accepted, expired = self.client.reports()
+
+        self.assertEqual(D.ExecType.NEW, accepted.get(D.EXEC_TYPE))
+        self.assertEqual("100", accepted.get(D.LEAVES_QTY))
+        self.assertEqual(D.ExecType.EXPIRED, expired.get(D.EXEC_TYPE))
+        self.assertEqual("0", expired.get(D.LEAVES_QTY))
+        self.assertEqual(accepted.get(D.ORDER_ID), expired.get(D.ORDER_ID))
+
+    def test_a_partially_filled_IOC_reports_all_three_stages(self):
+        self.rest("R32", quantity=100)
+
+        self.client.new_order("B32", side=D.SideValue.BUY, quantity=300,
+                              price="395.800", tif=D.TimeInForce.IOC)
+        accepted, filled, expired = self.client.reports()
+
+        self.assertEqual(("0", "300"),
+                         (accepted.get(D.CUM_QTY), accepted.get(D.LEAVES_QTY)))
+        self.assertEqual(("100", "200"),
+                         (filled.get(D.CUM_QTY), filled.get(D.LEAVES_QTY)))
+        self.assertEqual(("100", "0"),
+                         (expired.get(D.CUM_QTY), expired.get(D.LEAVES_QTY)))
+
+    def test_an_unfillable_FOK_is_acknowledged_before_it_expires(self):
+        self.client.new_order("B33", quantity=100, price="393.000",
+                              tif=D.TimeInForce.FOK)
+        accepted, expired = self.client.reports()
+
+        self.assertEqual(D.ExecType.NEW, accepted.get(D.EXEC_TYPE))
+        self.assertEqual(D.ExecType.EXPIRED, expired.get(D.EXEC_TYPE))
+
+    def test_a_market_order_with_an_empty_book_is_acknowledged_too(self):
+        self.client.new_order("B34", quantity=100, price=None,
+                              ord_type=D.OrdType.MARKET)
+        accepted, expired = self.client.reports()
+
+        self.assertEqual(D.ExecType.NEW, accepted.get(D.EXEC_TYPE))
+        self.assertEqual(D.ExecType.EXPIRED, expired.get(D.EXEC_TYPE))
+
+    def test_a_rejected_order_is_not_acknowledged_first(self):
+        """The acknowledgement means "the market accepted it", not "received"."""
+        # 3,564.000 is past nine times the nominal price of 395.800.
+        self.client.new_order("B35", quantity=100, price="3564.000")
+
+        report = self.only()
+
+        self.assertEqual(D.ExecType.REJECTED, report.get(D.EXEC_TYPE))
+
+    def test_an_order_that_rests_is_acknowledged_exactly_once(self):
+        self.client.new_order("B36", quantity=100, price="393.000")
+
+        report = self.only()
+
+        self.assertEqual(D.ExecType.NEW, report.get(D.EXEC_TYPE))
+
     def test_a_cancel_reports_ExecType_4(self):
         self.client.new_order("B8", quantity=100, price="393.000")
         self.client.drain()

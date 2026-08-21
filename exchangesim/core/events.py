@@ -26,12 +26,23 @@ class Event(object):
 
 
 class OrderAccepted(Event):
-    """An order passed validation and entered the market."""
+    """An order passed validation and entered the market.
 
-    __slots__ = ("order",)
+    The running totals are snapshotted for the same reason
+    :class:`OrderFilled` snapshots its own: a venue that acknowledges an order
+    *before* matching it produces this event and its fills in one batch, and by
+    render time the order has traded. The acceptance must still report the
+    order as the market received it -- ``CumQty`` 0 and ``LeavesQty`` equal to
+    the order quantity, which is what both HKEX documents require of it.
+    """
+
+    __slots__ = ("order", "cum_qty", "leaves_qty", "order_qty")
 
     def __init__(self, order):
         self.order = order
+        self.cum_qty = order.cum_qty
+        self.leaves_qty = order.leaves_qty
+        self.order_qty = order.quantity
 
     def describe(self):
         return {"event": self.name, "order_id": self.order.order_id,

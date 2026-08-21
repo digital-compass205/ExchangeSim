@@ -300,6 +300,28 @@ class CrossEncodingTest(unittest.TestCase):
         self.assertEqual(binary_fills[0].get(D.ORD_STATUS),
                          D.OrdStatus.FILLED)
 
+    def test_an_IOC_is_acknowledged_before_it_expires(self):
+        """The acknowledgement is a codec question as well as a venue one.
+
+        Order Accepted and Order Expired are two variants of the one binary
+        Execution Report (type 10), so both have to come back through the
+        shared bit table -- the acceptance carrying the entry totals and the
+        expiry the reason in bit 20.
+        """
+        binary_client = self.harness.client(BROKER3)
+
+        binary_client.new_order("B40", quantity=1000, price="395.800",
+                                tif=D.TimeInForce.IOC)
+        accepted, expired = binary_client.reports()
+
+        self.assertEqual(accepted.get(D.EXEC_TYPE), D.ExecType.NEW)
+        self.assertEqual(accepted.get(D.ORD_STATUS), D.OrdStatus.NEW)
+        self.assertEqual(accepted.get(D.LEAVES_QTY), "1000")
+        self.assertEqual(expired.get(D.EXEC_TYPE), D.ExecType.EXPIRED)
+        self.assertEqual(expired.get(D.ORD_STATUS), D.OrdStatus.EXPIRED)
+        self.assertEqual(expired.get(D.LEAVES_QTY), "0")
+        self.assertEqual(accepted.get(D.ORDER_ID), expired.get(D.ORDER_ID))
+
     def test_a_fill_names_both_brokers(self):
         fix_client = self.harness.client(BROKER1)
         binary_client = self.harness.client(BROKER3)

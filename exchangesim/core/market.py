@@ -23,13 +23,14 @@ class Market(object):
 
     def __init__(self, name, codec, trade_ids, clock=None, stp_mode="NONE",
                  initial_state=TradingState.CLOSED, publisher=None,
-                 tape_length=None, description=""):
+                 tape_length=None, description="", ack_on_entry=False):
         self.name = name
         self.codec = codec
         self.clock = clock
         self.description = description
         self.state = TradingStateMachine(name, initial_state)
-        self.matching = MatchingEngine(codec, trade_ids, clock, stp_mode)
+        self.matching = MatchingEngine(codec, trade_ids, clock, stp_mode,
+                                       ack_on_entry=ack_on_entry)
         self.data = MarketDataService(
             name, codec, tape_length or 500, publisher)
         self._books = {}
