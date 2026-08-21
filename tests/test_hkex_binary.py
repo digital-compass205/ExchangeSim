@@ -129,6 +129,38 @@ class BinaryOrderTest(unittest.TestCase):
         self.assertEqual(report.get(D.ORD_STATUS), D.OrdStatus.NEW)
         self.assertEqual(report.get(D.SECURITY_ID), GEM_SYMBOL)
 
+    def test_a_stock_code_is_accepted_padded_or_not(self):
+        # A real gateway sends 1 where the reference data says 00001; both name
+        # CK Hutchison, and the exchange itself takes either.
+        self.client.new_order("B11", symbol="1", quantity=500, price="42.500")
+        [report] = self.client.reports()
+        self.assertEqual(report.get(D.EXEC_TYPE), D.ExecType.NEW)
+        # The venue answers in its own spelling of the code.
+        self.assertEqual(report.get(D.SECURITY_ID), "00001")
+
+    def test_padding_is_forgiven_but_the_number_is_not_guessed(self):
+        self.client.new_order("B12", symbol="00700", quantity=100,
+                              price="395.800")
+        self.client.new_order("B13", symbol="700", quantity=100,
+                              price="395.800")
+        self.assertEqual([r.get(D.SECURITY_ID) for r in self.client.reports()],
+                         [SYMBOL, SYMBOL])
+
+        # Not a listed number, and not a number at all: both still refused.
+        self.client.new_order("B14", symbol="99999", quantity=100)
+        self.client.new_order("B15", symbol="ABCDE", quantity=100)
+        for report in self.client.reports():
+            self.assertEqual(report.get(D.EXEC_TYPE), D.ExecType.REJECTED)
+            self.assertIn("not listed", report.get(D.REJECT_TEXT))
+
+    def test_an_order_is_cancelled_by_the_code_it_was_sent_with(self):
+        self.client.new_order("B16", symbol="1", quantity=500, price="42.500")
+        self.client.drain()
+        self.client.cancel("B17", "B16", symbol="1", quantity=500)
+        [report] = self.client.reports()
+        self.assertEqual(report.get(D.EXEC_TYPE), D.ExecType.CANCELED)
+        self.assertEqual(report.get(D.SECURITY_ID), "00001")
+
     def test_an_odd_lot_is_still_refused(self):
         self.client.new_order("B4", quantity=50)
         [report] = self.client.reports()

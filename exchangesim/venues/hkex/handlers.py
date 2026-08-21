@@ -113,7 +113,7 @@ class HkexApplication(Application):
             return failure
 
         parties = self._parties(message)
-        security_id = message.get(D.SECURITY_ID)
+        security_id = self._security_id(message)
 
         if message.get(D.LOT_TYPE) == D.LotType.ODD_LOT:
             # The odd/special lot book is semi-automatic and matched by trade
@@ -190,10 +190,10 @@ class HkexApplication(Application):
         request = CancelRequest(
             session_key=session.key,
             # The order carries its own market; the engine reads it from there.
-            market=self.venue.segment_for(message.get(D.SECURITY_ID)),
+            market=self.venue.segment_for(self._security_id(message)),
             cl_ord_id=message.get(D.CL_ORD_ID),
             orig_cl_ord_id=message.get(D.ORIG_CL_ORD_ID),
-            symbol=message.get(D.SECURITY_ID),
+            symbol=self._security_id(message),
             side=rules.SIDE_TO_CORE.get(message.get(D.SIDE)),
             quantity=message.get_int(D.ORDER_QTY),
             received_at=self.clock.now(),
@@ -226,10 +226,10 @@ class HkexApplication(Application):
         time_in_force = message.get(D.TIME_IN_FORCE)
         request = ReplaceRequest(
             session_key=session.key,
-            market=self.venue.segment_for(message.get(D.SECURITY_ID)),
+            market=self.venue.segment_for(self._security_id(message)),
             cl_ord_id=message.get(D.CL_ORD_ID),
             orig_cl_ord_id=message.get(D.ORIG_CL_ORD_ID),
-            symbol=message.get(D.SECURITY_ID),
+            symbol=self._security_id(message),
             side=rules.SIDE_TO_CORE.get(message.get(D.SIDE)),
             quantity=message.get_int(D.ORDER_QTY),
             price=price,
@@ -252,7 +252,7 @@ class HkexApplication(Application):
             return failure
 
         scope = message.get(D.MASS_CANCEL_REQUEST_TYPE)
-        security_id = message.get(D.SECURITY_ID)
+        security_id = self._security_id(message)
         segment = message.get(D.MARKET_SEGMENT_ID)
 
         if scope == D.MassCancelRequestType.SECURITY and not security_id:
@@ -310,8 +310,20 @@ class HkexApplication(Application):
         has to be able to run whatever phase the venue was left in.
         """
         session = self.venue.auctions.get(
-            self.venue.segment_for(message.get(D.SECURITY_ID)))
+            self.venue.segment_for(self._security_id(message)))
         return session is not None and not session.cancellable
+
+    def _security_id(self, message):
+        """The SecurityID a message names, as this venue writes it.
+
+        A stock code is a number and clients write it padded or not, so what
+        arrives is resolved against the universe before anything looks it up.
+        What will not resolve is passed through unchanged: the reject that
+        follows should quote the client its own value back, not a padded
+        version of a security nobody lists.
+        """
+        raw = message.get(D.SECURITY_ID)
+        return self.venue.resolve_symbol(raw) or raw
 
     def _parties(self, message):
         """The <Parties> block as ``{PartyRole: PartyID}``.

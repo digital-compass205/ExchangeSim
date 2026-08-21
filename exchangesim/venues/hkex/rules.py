@@ -304,6 +304,18 @@ ASSUMPTIONS = [
      "source": "the specification says only that the value must be 1 if "
                "present, without describing the resulting behaviour"},
 
+    {"topic": "how a stock code is written",
+     "behaviour": "a numeric SecurityID is matched with padding ignored, so "
+                  "1, 0001 and 00001 all reach CK Hutchison; reports answer "
+                  "with the venue's own spelling, the padded five-digit form "
+                  "the reference data carries",
+     "alternative": "echo back whichever spelling the client sent",
+     "source": "an SEHK code is a number and clients send it either way -- a "
+               "real gateway sends 1 where this data says 00001, and the "
+               "exchange takes it. Which form the exchange *answers* with is "
+               "not stated in either protocol document, so the venue answers "
+               "with the one it lists"},
+
     # -- the binary encoding, where it and the FIX one do not simply agree --
 
     {"topic": "binary Gap Fill value",

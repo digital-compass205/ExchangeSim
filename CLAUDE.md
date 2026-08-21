@@ -162,6 +162,10 @@ These caused real bugs and are easy to reintroduce.
 
 **`OrigClOrdID` is the order's *current* ClOrdID, not its original one** (the specification is explicit). `OrderRegistry.resolve` enforces this while still remembering every identifier ever used, so a genuine duplicate is still rejectable.
 
+**Timestamps: UTC on the wire and in the API, local only at the point of display.** `core/clock.py:format_iso` is the one statement of that -- ISO 8601, milliseconds, trailing `Z` -- and `app.js:clockOf` and `cli/exsim.py:local_clock` are the two conversions. A naive ISO string is read as *local* by both a browser and a person, so an unmarked UTC timestamp silently shows the wrong hour; that is what it did. `audit.py` repeats the format inline rather than importing it, holding to its rule of importing nothing.
+
+**A stock code is a number, and clients write it either way.** HKEX reference data lists `00001`; a real gateway sends `1`. `HkexVenue.resolve_symbol` forgives the padding on the way in and the venue answers in its own spelling. Only padding -- a code that is not a number, or pads to something unlisted, is still refused.
+
 **Timestamp precision is a property of the dialect, not of FIX.** Japannext writes milliseconds and OCG-C microseconds, so `FieldDef.max_decimals` carries it and `build_session_dictionary(timestamp_decimals=...)` passes it down. The shared checker accepted only `.sss` until a real HKEX client sent what its own specification documents and was rejected with `SessionRejectReason=6`.
 
 **Markets are addressed by SubID, not by port — at Japannext.** `DAY`, `NGHT`, `DAYX`, `DAYU` are four separate books and trading states reached over one connection via `TargetSubID(57)`, falling back to the session's `default_sub_id`. HKEX is the counter-example and the reason "market" must stay a core concept rather than a header tag: there, the security's segment picks the book and no message names it. A venue that narrows which markets carry an instrument overrides `Venue.books_for`, so `instrument.add` places it where the wire protocol would.

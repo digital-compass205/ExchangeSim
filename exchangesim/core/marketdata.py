@@ -10,6 +10,8 @@ publisher can later subscribe to the same notifications.
 import logging
 from collections import deque
 
+from .clock import format_iso
+
 log = logging.getLogger(__name__)
 
 #: Trades retained per instrument for the ``trades`` command.
@@ -88,7 +90,8 @@ class InstrumentStatistics(object):
             "turnover": (str(codec.exact_notional(self.turnover_units, 1))
                          if codec and self.volume else None),
             "trades": self.trade_count,
-            "last_time": self.last_time.isoformat() if self.last_time else None,
+            "last_time": (format_iso(self.last_time)
+                          if self.last_time else None),
         }
 
 
@@ -151,7 +154,8 @@ class MarketDataService(object):
             "price": self.codec.format(trade.price),
             "quantity": trade.quantity,
             "aggressor": trade.aggressor_side,
-            "time": trade.timestamp.isoformat() if trade.timestamp else None,
+            "time": (format_iso(trade.timestamp)
+                     if trade.timestamp else None),
         })
         self._publish("trade:%s:%s" % (self.market, trade.symbol),
                       self._tapes[trade.symbol][-1])

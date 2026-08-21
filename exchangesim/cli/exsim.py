@@ -18,6 +18,7 @@ venue that runs several.
 """
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -367,7 +368,7 @@ def cmd_trades(client, opts):
     _put(args, "market", opts.market)
     return _emit(client.call("trades", args), opts,
                  lambda r: render_table(
-                     r["trades"],
+                     local_times(r["trades"]),
                      ["time", "price", "quantity", "aggressor", "trade_id"],
                      align={"price": "r", "quantity": "r"}))
 
@@ -427,7 +428,7 @@ def cmd_monitor(client, opts):
                          ["last", "volume", "vwap", "high", "low", "trades"]),
             "",
             "recent trades",
-            render_table(trades[-10:],
+            render_table(local_times(trades[-10:]),
                          ["time", "price", "quantity", "aggressor"],
                          align={"price": "r", "quantity": "r"}),
         ]
@@ -628,7 +629,7 @@ def cmd_audit(client, opts):
     result = client.call("audit", args)
     return _emit(result, opts, lambda r: render_table(
         [{"seq": e["seq"],
-          "time": (e["time"] or "")[11:19],
+          "time": local_clock(e["time"]),
           "": "<--" if e["direction"] == "in" else "-->",
           "message": e["type_name"] or e["type"],
           "symbol": e["symbol"] or "",
@@ -636,6 +637,36 @@ def cmd_audit(client, opts):
          for e in r["entries"]],
         ["seq", "time", "", "message", "symbol", "detail"],
         align={"seq": "r"}))
+
+
+def local_clock(iso):
+    """A UTC timestamp from the control plane as a local wall clock.
+
+    The venue keeps UTC and marks it with a trailing ``Z``; a terminal is read
+    where its reader is, which need not be where the venue runs. An unmarked
+    timestamp -- anything recorded before the marker existed -- is shown as it
+    stands rather than shifted on a guess.
+    """
+    if not iso:
+        return ""
+    try:
+        when = datetime.datetime.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return iso[11:19]
+    if not iso.endswith("Z"):
+        return when.strftime("%H:%M:%S")
+    local = when.replace(tzinfo=datetime.timezone.utc).astimezone()
+    return local.strftime("%H:%M:%S")
+
+
+def local_times(rows):
+    """The same rows with their ``time`` column read in local time."""
+    converted = []
+    for row in rows:
+        row = dict(row)
+        row["time"] = local_clock(row.get("time"))
+        converted.append(row)
+    return converted
 
 
 def _put(args, key, value):

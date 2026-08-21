@@ -102,6 +102,11 @@ with their sizes, then the day's statistics — spread, open, high, low, VWAP,
 volume, turnover, trade count, the price limits, and the instrument's tick size
 and board lot.
 
+Times on the board and in `exsim` are shown in **your** local zone. The venue
+keeps UTC — which is what FIX and OCG-C put on the wire, and what the API
+serves, marked with a trailing `Z` — and each display converts, so a board in
+Hong Kong watching a venue elsewhere still reads the local clock.
+
 **Level 2** has the middle column to itself, a Japanese-style depth board: one
 row per tick, ask size on the left, price down the centre, bid size on the
 right. `OVER` and `UNDER` carry everything resting outside the window, and a
@@ -220,7 +225,9 @@ are named by `Symbol(55)`: `7203`, `6758`, `9984` and others in
 **refuses** a client-initiated sequence reset — use the `session.reset` command
 instead. Instruments are named by `SecurityID(48)` with
 `SecurityIDSource(22)=8` and `SecurityExchange(207)=XHKG`: `00700`, `00001`,
-`00005` and others in `exchangesim/venues/hkex/reference/securities.csv`. No
+`00005` and others in `exchangesim/venues/hkex/reference/securities.csv`. A
+stock code is a number, so send it padded or not — `1`, `0001` and `00001` all
+reach CK Hutchison — and reports answer with the padded form the venue lists. No
 message names a market — the security's segment decides which book it reaches.
 Every business message carries a `<Parties>` group and a
 `<DisclosureInstructionGrp>`.

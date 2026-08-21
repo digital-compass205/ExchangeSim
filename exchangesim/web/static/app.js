@@ -160,8 +160,17 @@
     return (value === null || value === undefined) ? "" : value.toLocaleString();
   }
 
+  // The venue keeps UTC and says so with a trailing Z; a board is read
+  // wherever its reader is sitting, so the conversion happens here. Formatted
+  // by hand rather than with toLocaleTimeString, which would give a 12-hour
+  // clock in some locales and break a column that has to stay one width.
   function clockOf(iso) {
-    return iso ? iso.slice(11, 19) : "";
+    if (!iso) { return ""; }
+    var when = new Date(iso);
+    if (isNaN(when.getTime())) { return iso.slice(11, 19); }
+    return [when.getHours(), when.getMinutes(), when.getSeconds()]
+      .map(function (part) { return String(part).padStart(2, "0"); })
+      .join(":");
   }
 
   // -- selectors ----------------------------------------------------------

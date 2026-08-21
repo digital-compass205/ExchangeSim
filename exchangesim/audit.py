@@ -94,7 +94,12 @@ class AuditEntry(object):
         """The list row: enough to recognise an entry without opening it."""
         return {
             "seq": self.seq,
-            "time": self.time.isoformat() if self.time is not None else None,
+            # Naive UTC, said out loud: without the marker a reader takes
+            # it for local time. The convention is stated once, in
+            # core/clock.py:format_iso -- which this module deliberately
+            # does not import, holding to its rule of importing nothing.
+            "time": (self.time.isoformat(timespec="milliseconds") + "Z"
+                     if self.time is not None else None),
             "kind": self.kind,
             "direction": self.direction,
             "session": self.session,

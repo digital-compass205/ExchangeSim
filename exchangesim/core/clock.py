@@ -29,6 +29,23 @@ def format_utc(dt):
     return dt.strftime(FIX_TIMESTAMP_FMT)[:-3]
 
 
+def format_iso(dt):
+    # type: (datetime) -> str
+    """A timestamp for an API reply: ISO 8601, and explicit that it is UTC.
+
+    Every clock in here keeps naive UTC, whose ISO form says nothing about its
+    zone -- so a reader takes it for local time and a board eight hours away
+    shows the wrong number. The ``Z`` is what lets each display convert to
+    wherever its reader is sitting, which is the only place that decision can
+    sensibly be made: the venue, the board and the terminal need not be in the
+    same country.
+    """
+    # Milliseconds, not microseconds: the ECMAScript date format specifies
+    # exactly three fractional digits, and a browser is entitled to refuse more
+    # -- which would leave the board showing nothing at all.
+    return dt.isoformat(timespec="milliseconds") + "Z"
+
+
 def parse_utc(text):
     # type: (str) -> datetime
     """Parse a FIX UTCTimestamp.

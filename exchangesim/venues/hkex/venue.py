@@ -55,6 +55,11 @@ PRICE_DECIMALS = 3
 
 BEGIN_STRING = "FIXT.1.1"
 
+#: Width of an SEHK stock code as the reference data writes it, zero-padded --
+#: 00001, 00700. A client may send the same code unpadded, which is what
+#: :meth:`HkexVenue.resolve_symbol` is for.
+SYMBOL_WIDTH = 5
+
 #: The two encodings of OCG-C a session may be registered for. HKEX publishes
 #: the same protocol as tag=value FIX and as a fixed-width binary format, and a
 #: Comp ID is entitled to one of them.
@@ -318,6 +323,28 @@ class HkexVenue(Venue):
     def segment_for(self, symbol):
         """The market an order in ``symbol`` reaches, or None if unlisted."""
         return self.segments.get(symbol)
+
+    def resolve_symbol(self, value):
+        """This venue's own SecurityID for what a client sent, or None.
+
+        An SEHK stock code is a *number*, and clients write it either way: the
+        reference data here says ``00001`` and a real gateway sends ``1``. Both
+        name CK Hutchison, and refusing the second as unlisted would be refusing
+        a message the exchange itself accepts.
+
+        Only the padding is forgiven. A code that is not a number, or one that
+        pads to something this venue does not list, still resolves to nothing --
+        the leniency is about how the same number is written, not about
+        guessing which security was meant.
+        """
+        if not value:
+            return None
+        if value in self.segments:
+            return value
+        if not value.isdigit() or len(value) > SYMBOL_WIDTH:
+            return None
+        padded = value.zfill(SYMBOL_WIDTH)
+        return padded if padded in self.segments else None
 
     # -- self-match prevention ---------------------------------------------
 
