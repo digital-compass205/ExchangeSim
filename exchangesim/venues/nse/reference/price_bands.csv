@@ -1,0 +1,14 @@
+# NSE Capital Market daily price range -- the circuit filter.
+#
+# UNVERIFIED. NSE sets the operating range per security, not by a published
+# price ladder: a scrip carries a 2, 5, 10 or 20 per cent band, and the band
+# for one security is a property of that security rather than of its price.
+# This table is therefore the *fallback* used when a security names no band of
+# its own, and it deliberately holds a single permissive row. Set a real band
+# per security with the `band` column of securities.csv.
+#
+# lower_bound  inclusive lower bound of the base-price bracket, in rupees
+# band         the range either side of the base price, in per cent
+#
+lower_bound,band
+0,20

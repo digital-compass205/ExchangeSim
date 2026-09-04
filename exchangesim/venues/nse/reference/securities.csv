@@ -1,0 +1,33 @@
+# NSE Capital Market securities universe.
+#
+# UNVERIFIED sample data. The symbols and series are real and the board lot of
+# 1 is right for the equity segment; base_price is a plausible reference price
+# rather than a quotation, and shares_outstanding is rounded hard. Edit this
+# file and run `exsim reference reload` -- no restart needed.
+#
+# symbol     the venue's own spelling, SYMBOL-SERIES. On the wire these are two
+#            fields of SEC_INFO -- Symbol CHAR[10] and Series CHAR[2] -- but
+#            neither names a security on its own: INFY-EQ and INFY-BE are
+#            different books. Everything above the codec uses the composite,
+#            and the gateway splits it. `INFY` alone resolves when exactly one
+#            series is listed for it.
+# lot_size   the board lot. One share, in the equity segment.
+# band       the security's daily price range (circuit filter) in per cent.
+#            NSE sets this per scrip, not by a price ladder, which is why it is
+#            a column here rather than a table. Empty falls back to the single
+#            permissive row in price_bands.csv.
+# tradable   n suspends the security without removing it from the universe.
+#
+symbol,name,lot_size,base_price,tier,shares_outstanding,tradable,band
+INFY-EQ,Infosys,1,1543.25,NIFTY50,4150000000,y,20
+RELIANCE-EQ,Reliance Industries,1,2478.60,NIFTY50,6765000000,y,20
+TCS-EQ,Tata Consultancy Services,1,3856.40,NIFTY50,3620000000,y,10
+HDFCBANK-EQ,HDFC Bank,1,1492.75,NIFTY50,7600000000,y,20
+SBIN-EQ,State Bank of India,1,782.35,NIFTY50,8920000000,y,20
+ITC-EQ,ITC,1,436.90,NIFTY50,12490000000,y,20
+WIPRO-EQ,Wipro,1,289.55,NIFTY50,5230000000,y,20
+TATAMOTORS-EQ,Tata Motors,1,978.15,NIFTY50,3680000000,y,20
+ONGC-EQ,Oil and Natural Gas Corporation,1,264.80,NIFTY50,12580000000,y,10
+YESBANK-BE,Yes Bank,1,21.45,,31350000000,y,5
+IDEA-EQ,Vodafone Idea,1,13.70,,69700000000,y,5
+NEWCO-EQ,Newco Industries,1,105.00,,150000000,n,20

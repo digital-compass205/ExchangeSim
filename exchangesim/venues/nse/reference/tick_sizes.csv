@@ -1,0 +1,18 @@
+# NSE Capital Market tick size.
+#
+# Source: SEBI/NSE circulars on tick size for the equity cash segment. Since
+# the move to a single tick, every security in the Normal market trades in
+# five-paise increments regardless of price, so this table has one row -- but
+# it stays a table, because NSE has revised the tick before and doing so again
+# should be a data edit rather than a code change.
+#
+# lower_bound  the inclusive lower bound of the bracket, in rupees. A row
+#              applies from its bound upwards, so a table with more rows must
+#              start the next one a paisa above the published boundary: a band
+#              printed as "up to 250.00" ends at 250.00 and the next row's
+#              bound is 250.01, not 250.00.
+# tier         empty means the default, which applies to every security
+# tick         the minimum increment, in rupees
+#
+lower_bound,tier,tick
+0,,0.05

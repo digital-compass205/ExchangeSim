@@ -53,8 +53,20 @@ class Field(object):
         return self.offset + self.wire.width
 
     def decode(self, raw, message):
+        """Set this field on ``message``, unless it is blank.
+
+        A character field full of blanks is how a fixed-width protocol says
+        "nothing here" -- there is no other way to say it, since the field
+        travels either way. Above the wire, absence is how every other protocol
+        here says the same thing, so a blank field is left off the message
+        rather than set to the empty string. A *numeric* zero is a real value
+        and is always set: ``ErrorCode`` zero says the message reports no error,
+        and dropping it would lose that.
+        """
         value = self.wire.unpack(raw, self.offset)
-        message.set(self.tag, self.converter.from_wire(value))
+        text = self.converter.from_wire(value)
+        if text != "":
+            message.set(self.tag, text)
 
     def encode(self, message, buffer):
         text = message.get(self.tag)
@@ -96,6 +108,46 @@ class Scaled(V.Converter):
 
 #: Prices are in paise throughout the Capital Market protocol.
 PAISE = Scaled(2)
+
+
+class Reserved(object):
+    """A run of bytes the specification reserves, carrying nothing.
+
+    Declared rather than left as a gap, for two reasons. It lets a layout be
+    read line for line against the table it came from, reserved rows included;
+    and it makes ``body_size`` equal the published packet length exactly, so
+    :meth:`Layout.check` catches a field that is too *short* as well as one that
+    overruns. Without it a trailing reserved run would hide any under-run.
+
+    Nothing is read back -- a reserved field has no value and giving it a tag
+    would put noise in the audit and invite somebody to start meaning something
+    by it. On the way out it is NULs, which is what Chapter 2 asks for and what
+    the zeroed buffer already holds.
+    """
+
+    __slots__ = ("name", "offset", "width")
+
+    def __init__(self, offset, width, name="Reserved"):
+        self.name = name
+        self.offset = offset
+        self.width = width
+
+    @property
+    def end(self):
+        return self.offset + self.width
+
+    @property
+    def tags(self):
+        return ()
+
+    def decode(self, raw, message):
+        """Nothing: a reserved run has no value."""
+
+    def encode(self, message, buffer):
+        """Nothing: the buffer is already zero, which is what NUL means here."""
+
+    def __repr__(self):
+        return "Reserved(%d, %d)" % (self.offset, self.width)
 
 
 class Flags(object):
@@ -213,7 +265,10 @@ class Layout(object):
     def tags(self):
         tags = []
         for field in self.fields:
-            tags.extend(field.tags if isinstance(field, Flags) else [field.tag])
+            if hasattr(field, "tags"):          # Flags, Reserved
+                tags.extend(field.tags)
+            else:
+                tags.append(field.tag)
         return tuple(tags)
 
     def check(self):
@@ -228,8 +283,6 @@ class Layout(object):
                     % (self.name, self.msg_type, self.size, self.body_size))
         seen = {}
         for field in self.fields:
-            if isinstance(field, Flags):
-                continue
             for offset in range(field.offset, field.end):
                 if offset in seen:
                     return ("%s (%s): %s overlaps %s at offset %d"
