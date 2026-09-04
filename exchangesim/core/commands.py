@@ -54,10 +54,11 @@ class CancelRequest(object):
     """A request to cancel an existing order."""
 
     __slots__ = ("session_key", "market", "cl_ord_id", "orig_cl_ord_id",
-                 "symbol", "side", "quantity", "received_at")
+                 "symbol", "side", "quantity", "received_at", "order_id")
 
     def __init__(self, session_key, market, cl_ord_id, orig_cl_ord_id,
-                 symbol=None, side=None, quantity=None, received_at=None):
+                 symbol=None, side=None, quantity=None, received_at=None,
+                 order_id=None):
         self.session_key = session_key
         self.market = market
         self.cl_ord_id = cl_ord_id
@@ -67,6 +68,13 @@ class CancelRequest(object):
         self.side = side
         self.quantity = quantity
         self.received_at = received_at
+        #: The venue's own OrderID, for a protocol whose cancel and amend name
+        #: the order that way rather than by a client identifier. Not every
+        #: exchange gives the client a handle of its own: NSE's NNF has none at
+        #: all, and cancel-by-OrderID is FIX's own alternative. Used only when
+        #: ``orig_cl_ord_id`` is None, so nothing that names an order the usual
+        #: way changes behaviour.
+        self.order_id = order_id
 
     def __repr__(self):
         return "CancelRequest(%s -> %s)" % (self.orig_cl_ord_id, self.cl_ord_id)
@@ -77,12 +85,13 @@ class ReplaceRequest(object):
 
     __slots__ = ("session_key", "market", "cl_ord_id", "orig_cl_ord_id",
                  "symbol", "side", "quantity", "price", "time_in_force",
-                 "min_qty", "exec_inst", "capacity", "received_at")
+                 "min_qty", "exec_inst", "capacity", "received_at",
+                 "order_id")
 
     def __init__(self, session_key, market, cl_ord_id, orig_cl_ord_id,
                  symbol=None, side=None, quantity=None, price=None,
                  time_in_force=None, min_qty=None, exec_inst=(), capacity=None,
-                 received_at=None):
+                 received_at=None, order_id=None):
         self.session_key = session_key
         self.market = market
         self.cl_ord_id = cl_ord_id
@@ -97,6 +106,9 @@ class ReplaceRequest(object):
         self.exec_inst = tuple(exec_inst)
         self.capacity = capacity
         self.received_at = received_at
+        #: The venue's own OrderID, for a protocol whose amend and cancel name
+        #: the order that way. See CancelRequest.order_id.
+        self.order_id = order_id
 
     def __repr__(self):
         return "ReplaceRequest(%s -> %s, %s@%s)" % (

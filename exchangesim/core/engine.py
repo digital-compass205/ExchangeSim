@@ -172,6 +172,38 @@ class Engine(object):
 
     # -- shared resolution -------------------------------------------------
 
+    def _named_order(self, request):
+        """The order a request names, or ``(None, why not)``.
+
+        Two ways to name one. A client identifier, which is how FIX does it and
+        the only way either of the first two venues here can. Or the venue's own
+        ``OrderID``, which is how a protocol with no client handle at all has to
+        do it -- NSE's NNF names an order by the ``OrderNumber`` the exchange
+        assigned, and gives the client nothing else to hold on to.
+
+        The second path needs an ownership check that the first gets for free:
+        the ClOrdID index is keyed by session, so a client can only ever resolve
+        its own orders through it, while ``by_order_id`` is a single global map.
+        Without the check below, one client could cancel another's order by
+        guessing a number.
+        """
+        if request.orig_cl_ord_id is not None:
+            order = self.registry.resolve(request.session_key,
+                                          request.orig_cl_ord_id)
+            if order is None:
+                return None, ("no live order with ClOrdID '%s'"
+                              % request.orig_cl_ord_id)
+            return order, None
+
+        order_id = getattr(request, "order_id", None)
+        if order_id is None:
+            return None, "the request names no order"
+
+        order = self.registry.by_order_id(order_id)
+        if order is None or order.session_key != request.session_key:
+            return None, "no live order with OrderID '%s'" % order_id
+        return order, None
+
     def _resolve(self, request, is_replace):
         """Find the order a cancel or replace names, or produce a rejection."""
         if self.registry.is_duplicate(request.session_key, request.cl_ord_id):
@@ -181,12 +213,11 @@ class Engine(object):
                 "ClOrdID '%s' has already been used" % request.cl_ord_id,
                 is_replace=is_replace)
 
-        order = self.registry.resolve(request.session_key, request.orig_cl_ord_id)
+        order, missing = self._named_order(request)
         if order is None:
             return None, CancelRejected(
                 request.cl_ord_id, request.orig_cl_ord_id,
-                CancelRejectReason.UNKNOWN_ORDER,
-                "no live order with ClOrdID '%s'" % request.orig_cl_ord_id,
+                CancelRejectReason.UNKNOWN_ORDER, missing,
                 is_replace=is_replace)
 
         if not order.is_live:

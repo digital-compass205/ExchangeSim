@@ -17,6 +17,11 @@ def _hkex():
     return HkexVenue
 
 
+def _nse():
+    from .nse.venue import NseVenue
+    return NseVenue
+
+
 def _generic():
     from .base import Venue
     return Venue
@@ -26,6 +31,7 @@ def _generic():
 FACTORIES = {
     "japannext": _japannext,
     "hkex": _hkex,
+    "nse": _nse,
     "generic": _generic,
 }
 

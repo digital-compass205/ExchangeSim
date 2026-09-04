@@ -112,14 +112,17 @@ class FieldTest(unittest.TestCase):
         field.decode(bytes(buffer), message)
         self.assertEqual(message.get(PRICE), "1543.25")
 
-    def test_a_price_with_no_fraction_keeps_its_shortest_spelling(self):
+    def test_a_price_keeps_its_decimal_places(self):
+        # 154300 paise reads back as 1543.00, not 1543: every other surface
+        # here writes a price with the venue's own precision, and two spellings
+        # of one price in the audit would be worse than a longer string.
         buffer = bytearray(8)
         field = L.Field(PRICE, "Price", T.LONG, 0, L.PAISE)
         field.encode(Message.create("1").set(PRICE, "1543"), buffer)
         self.assertEqual(T.LONG.unpack(bytes(buffer), 0), 154300)
         message = Message.create("1")
         field.decode(bytes(buffer), message)
-        self.assertEqual(message.get(PRICE), "1543")
+        self.assertEqual(message.get(PRICE), "1543.00")
 
 
 class FlagsTest(unittest.TestCase):

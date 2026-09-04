@@ -194,19 +194,35 @@ class OrderRegistry(object):
     # -- registration ------------------------------------------------------
 
     def is_duplicate(self, session_key, cl_ord_id):
-        """True if this session has already used this ClOrdID for anything."""
+        """True if this session has already used this ClOrdID for anything.
+
+        A *missing* ClOrdID is never a duplicate. Not every protocol gives the
+        client a handle: NSE's NNF has none, and every order from such a venue
+        would otherwise collide on ``(session_key, None)`` from the second one
+        onwards.
+        """
+        if cl_ord_id is None:
+            return False
         return (session_key, cl_ord_id) in self._by_cl_ord_id
 
     def add(self, order):
+        self._by_order_id[order.order_id] = order
+        if order.cl_ord_id is None:
+            return order
         key = (order.session_key, order.cl_ord_id)
         if key in self._by_cl_ord_id:
             raise DuplicateClOrdID(order.cl_ord_id)
-        self._by_order_id[order.order_id] = order
         self._by_cl_ord_id[key] = order
         return order
 
     def rename(self, order, cl_ord_id):
-        """Record a new ClOrdID for an existing order, keeping the old one bound."""
+        """Record a new ClOrdID for an existing order, keeping the old one bound.
+
+        A no-op where there is no client identifier to advance -- the order is
+        known by the venue's own OrderID, which does not change.
+        """
+        if cl_ord_id is None:
+            return order
         key = (order.session_key, cl_ord_id)
         if key in self._by_cl_ord_id:
             raise DuplicateClOrdID(cl_ord_id)

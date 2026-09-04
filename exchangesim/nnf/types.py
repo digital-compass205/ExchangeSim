@@ -202,6 +202,39 @@ class Char(WireType):
         return chunk.split(NUL, 1)[0].decode("latin-1").strip()
 
 
+class Raw(WireType):
+    """A fixed-width run of bytes that is not text.
+
+    The specification declares a cryptographic key as ``CHAR[32]``, but it is a
+    key: every one of the 256 byte values is legal in it, NULs and spaces
+    included. Reading one with :class:`Char` would truncate it at the first NUL
+    and strip the spaces off either end -- silently, and only for some keys, so
+    a test with a lucky key would pass. Anything whose bytes are a value rather
+    than a word uses this instead.
+
+    Carried above the wire as a latin-1 string, which is the identity mapping
+    on bytes, so nothing between here and the venue has to hold ``bytes``.
+    """
+
+    name = "CHAR[] (raw)"
+    default = ""
+
+    def __init__(self, width):
+        self.width = width
+        self.name = "CHAR[%d] (raw)" % width
+
+    def pack(self, value):
+        if isinstance(value, bytes):
+            raw = value
+        else:
+            raw = ("" if value is None else str(value)).encode("latin-1")
+        return (raw + NUL * self.width)[:self.width]
+
+    def unpack(self, raw, offset):
+        _need(raw, offset, self.width)
+        return raw[offset:offset + self.width].decode("latin-1")
+
+
 class Reserved(WireType):
     """A reserved or filler run of bytes.
 

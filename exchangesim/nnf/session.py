@@ -95,10 +95,12 @@ class NnfSessionConfig(object):
     """One user who may sign on, from the venue config file."""
 
     __slots__ = ("user_id", "box_id", "broker_id", "branch_id", "password",
-                 "user_type", "markets", "cancel_on_disconnect")
+                 "user_type", "markets", "cancel_on_disconnect",
+                 "trader_name", "broker_name")
 
     def __init__(self, user_id, box_id, broker_id, branch_id=1, password=None,
-                 user_type=None, markets=None, cancel_on_disconnect=False):
+                 user_type=None, markets=None, cancel_on_disconnect=False,
+                 trader_name=None, broker_name=None):
         self.user_id = int(user_id)
         self.box_id = int(box_id)
         self.broker_id = broker_id
@@ -107,6 +109,9 @@ class NnfSessionConfig(object):
         self.user_type = user_type
         self.markets = tuple(markets or ())
         self.cancel_on_disconnect = cancel_on_disconnect
+        #: Echoed back on the sign-on response; the client displays them.
+        self.trader_name = trader_name
+        self.broker_name = broker_name
 
     @property
     def key(self):
@@ -479,8 +484,8 @@ class BoxConnection(object):
         audit.record_message(
             direction, name, message=message, raw=raw,
             type_name=definition.name if definition is not None else None,
-            symbol=symbol_of(fields), seq_num=fields.get(C.MSG_SEQ_NUM),
-            ok=error is None, error=error, protocol="nnf")
+            extracted=fields, symbol=symbol_of(fields),
+            error=error, protocol="nnf")
 
     def describe(self):
         return {
@@ -620,6 +625,10 @@ class NnfSessionManager(object):
 
     def describe(self):
         return [session.describe() for session in self.sessions]
+
+    def describe_boxes(self):
+        """The connections, as against the users on them."""
+        return [box.describe() for box in self.boxes]
 
     def tick(self):
         for box in self._boxes.values():

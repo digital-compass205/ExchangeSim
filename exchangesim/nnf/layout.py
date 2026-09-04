@@ -94,6 +94,13 @@ class Scaled(V.Converter):
     "All price fields must be multiplied by 100 before sending to the host end
     and divided by 100 while receiving" -- done by parsing digits rather than by
     multiplying a float, for the reason :mod:`exchangesim.core.prices` exists.
+
+    The decimal places are **kept**, so 154000 paise reads back as ``1540.00``
+    rather than ``1540``. The shared ``unscale`` gives the shortest string that
+    means the value, which is right for a quantity with eight implied places and
+    wrong for a price: everything else here -- the ladder, the tape, the board,
+    ``PriceCodec.format`` -- writes a price with the venue's own precision, and
+    a codec that disagreed would put two spellings of one price into the audit.
     """
 
     def __init__(self, places=2):
@@ -103,7 +110,10 @@ class Scaled(V.Converter):
         return V.scale(text, self.places)
 
     def from_wire(self, value):
-        return V.unscale(value, self.places)
+        value = int(value)
+        sign = "-" if value < 0 else ""
+        whole, fraction = divmod(abs(value), 10 ** self.places)
+        return "%s%d.%0*d" % (sign, whole, self.places, fraction)
 
 
 #: Prices are in paise throughout the Capital Market protocol.

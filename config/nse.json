@@ -1,0 +1,145 @@
+{
+  "venue": "nse",
+  "name": "NSE-SIM",
+
+  "control": {
+    "host": "127.0.0.1",
+    "port": 9103,
+    "token": null
+  },
+
+  "log": {
+    "level": "INFO",
+    "file": null
+  },
+
+  "audit": {
+    "capacity": 2000
+  },
+
+  "nnf": {
+    "host": "127.0.0.1",
+    "port": 9021,
+    "heartbeat_interval": 30,
+    "heartbeat_drop_limit": 10,
+    "require_encryption": false,
+
+    "boxes": [
+      {
+        "box_id": 1,
+        "broker_ids": ["10123"],
+        "users": [
+          {
+            "user_id": 40521,
+            "trader_name": "DEALER ONE",
+            "broker_name": "SIMULATOR SECURITIES",
+            "user_type": "2",
+            "branch_id": 1,
+            "cancel_on_disconnect": true
+          },
+          {
+            "user_id": 40522,
+            "trader_name": "DEALER TWO",
+            "broker_name": "SIMULATOR SECURITIES",
+            "user_type": "2",
+            "branch_id": 1,
+            "cancel_on_disconnect": false
+          }
+        ]
+      },
+      {
+        "box_id": 2,
+        "broker_ids": ["10456"],
+        "users": [
+          {
+            "user_id": 40777,
+            "trader_name": "DEALER THREE",
+            "broker_name": "OTHER SECURITIES",
+            "user_type": "2",
+            "branch_id": 1,
+            "cancel_on_disconnect": false
+          }
+        ]
+      }
+    ]
+  },
+
+  "gateway_router": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 9022,
+    "tls": "none",
+    "encryption": "new"
+  },
+
+  "markets": [
+    {
+      "name": "NORMAL",
+      "description": "Normal Market",
+      "state": "CLOSED"
+    }
+  ],
+
+  "limits": {
+    "max_order_value": null,
+    "max_quantity": null
+  },
+
+  "tape_length": 500,
+  "first_order_number": 1,
+
+  "_notes": [
+    "NSE's Capital Market runs on the NNF Trimmed Protocol, which is not FIX",
+    "in any encoding: a proprietary fixed-width big-endian format with its own",
+    "sign-on, no sequence numbers and no resend. See docs/specs/README.md.",
+    "",
+    "There are two listeners. 'nnf.port' is the gateway, where members trade.",
+    "'gateway_router.port' is the separate port a member dials FIRST, to",
+    "collect the session key, cryptographic key, IV and additional key that",
+    "encrypt the gateway connection. Both are joined by the Box ID.",
+    "",
+    "A connection is a BOX, and many users sign on over one box -- which is",
+    "unlike either other venue here, where a connection is a session. The",
+    "'sessions' command lists users, because that is what an order's owner",
+    "means; the 'boxes' command lists connections. Disconnecting a box signs",
+    "off every user on it, as the specification requires.",
+    "",
+    "'gateway_router.encryption' picks the published methodology: 'existing'",
+    "is AES-256-GCM used as a keystream with an MD5 in the packet prefix, and",
+    "'new' is authenticated GCM whose tag displaces that MD5. A member is",
+    "entitled to one or the other by which router port it dials; this",
+    "simulator serves whichever is configured here.",
+    "",
+    "'gateway_router.tls' only accepts 'none'. The specification requires TLS",
+    "1.3 on the router leg; this simulator's reactor has no TLS support, and",
+    "serving plain TCP under a setting that claimed '1.3' would be worse than",
+    "refusing. The key exchange is therefore in clear -- everything after it",
+    "is encrypted exactly as published. Recorded in rules.ASSUMPTIONS.",
+    "",
+    "'require_encryption' true holds a member to the whole Chapter 10",
+    "sequence: a box that never collected a key from the router is refused at",
+    "registration. False, the default, lets a client be pointed straight at",
+    "the gateway while it is being brought up.",
+    "",
+    "Only the Regular Lot book of the Normal market is traded. Special Terms,",
+    "Stop Loss, Odd Lot, Spot, Auction and Call Auction 2 are rejected with",
+    "ERR_INVALID_BOOK_TYPE, and All Or None, Minimum Fill, disclosed quantity",
+    "and GTC/GTD orders are rejected too -- see 'venue.assumptions'.",
+    "",
+    "There is no self-trade prevention: NNF Capital Market has none, and the",
+    "core's per-market mode keys on the participant code, which means",
+    "something else here. A market configured with any stp_mode but NONE is",
+    "refused at start-up rather than silently honoured.",
+    "",
+    "Reference data defaults to the CSVs in exchangesim/venues/nse/reference/.",
+    "Override with:",
+    "  \"reference\": {",
+    "    \"securities\": \"reference/securities.csv\",",
+    "    \"tick_sizes\": \"reference/tick_sizes.csv\",",
+    "    \"price_bands\": \"reference/price_bands.csv\"",
+    "  }",
+    "Paths are resolved relative to this file. A security's daily price range",
+    "comes from the 'band' column of securities.csv, because NSE sets it per",
+    "scrip rather than by a published price ladder."
+  ]
+}

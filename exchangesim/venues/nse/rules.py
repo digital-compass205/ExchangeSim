@@ -1,0 +1,346 @@
+"""Mapping between NSE's vocabulary and the core's, and what NSE refuses.
+
+Three kinds of thing live here. The value tables, which are the whole of the
+translation between a wire value and a core enum. The refusals -- which books,
+which order attributes and which flows this venue will not trade, each with the
+published error code it answers with. And ``ASSUMPTIONS``, everything the
+specification does not settle, reported by ``exsim venue.assumptions``.
+
+**Rejections are numeric here, and that is a mapping rather than a core change.**
+``core/enums.py:RejectReason`` is deliberately the simulator's own vocabulary,
+"which a venue module maps onto its own codes" -- Japannext onto
+``OrdRejReason(103)``, HKEX onto its own, NSE onto ``ErrorCode``. Where NSE
+draws a distinction the core has no word for -- an odd lot, a minimum fill, a
+stop-loss trigger -- the gateway refuses before the engine ever sees it and
+names the code itself.
+"""
+
+from ...core.enums import (
+    CancelRejectReason,
+    Capacity,
+    OrderStatus,
+    OrderType,
+    RejectReason,
+    Side,
+    TimeInForce,
+    TradingState,
+)
+from ...core.validation import ValidationLimits
+from . import dictionary as D
+from . import transactions as X
+
+# -- values ------------------------------------------------------------------
+
+SIDE_TO_CORE = {
+    D.BuySell.BUY: Side.BUY,
+    D.BuySell.SELL: Side.SELL,
+}
+SIDE_TO_WIRE = dict((core, wire) for wire, core in SIDE_TO_CORE.items())
+
+CAPACITY_TO_CORE = {
+    D.ProClient.CLIENT: Capacity.AGENCY,
+    D.ProClient.PRO: Capacity.PRINCIPAL,
+}
+CAPACITY_TO_WIRE = dict((core, wire) for wire, core in CAPACITY_TO_CORE.items())
+
+#: Market status, as ``SYSTEM_INFORMATION_OUT`` reports it. NSE has one more
+#: state than the core's PRE_OPEN: "Preopen ended" is the locked window between
+#: the close of order entry and the uncrossing, which is exactly what the core
+#: calls OPENING_AUCTION.
+STATE_TO_MARKET_STATUS = {
+    TradingState.PRE_OPEN: D.MarketStatus.PRE_OPEN,
+    TradingState.OPENING_AUCTION: D.MarketStatus.PRE_OPEN_ENDED,
+    TradingState.OPEN: D.MarketStatus.OPEN,
+    TradingState.CLOSED: D.MarketStatus.CLOSED,
+    TradingState.HALTED: D.MarketStatus.CLOSED,
+    TradingState.LUNCH_BREAK: D.MarketStatus.CLOSED,
+    TradingState.CLOSING_AUCTION: D.MarketStatus.CLOSED,
+}
+
+#: ``ActivityType`` on a trade confirmation. The document lists several; only
+#: the ordinary one is produced, since trade modification and cancellation are
+#: not implemented.
+ACTIVITY_TRADE = "NT"
+
+#: HKEX taught the core that whether an acknowledgement precedes the executions
+#: is a venue answer. NSE answers yes: ORDER_CONFIRMATION carries the
+#: OrderNumber, and TRADE_CONFIRMATION references it, so a client that never
+#: saw the confirmation would be told about a fill on an order it cannot name.
+ACK_BEFORE_EXECUTION = True
+
+
+# -- what this venue refuses -------------------------------------------------
+
+#: The only book this venue trades. Everything else is refused outright rather
+#: than promoted to a Regular Lot order, on the reasoning CLAUDE.md gives for
+#: HKEX's odd lots: half-simulating a flow is worse than not having it.
+SUPPORTED_BOOK = D.BookType.REGULAR_LOT
+
+#: Why each other book is refused, and with which published error code.
+UNSUPPORTED_BOOKS = {
+    D.BookType.SPECIAL_TERMS: (
+        16422, "the Special Terms book is not implemented"),
+    D.BookType.STOP_LOSS: (
+        16422, "the Stop Loss book is not implemented"),
+    D.BookType.ODD_LOT: (
+        16422, "the Odd Lot book is not implemented"),
+    D.BookType.SPOT: (
+        16422, "the Spot book is not implemented"),
+    D.BookType.AUCTION: (
+        16422, "the Auction book is not implemented"),
+    D.BookType.CALL_AUCTION2: (
+        16422, "Call Auction 2 is not implemented"),
+}
+
+#: Order attributes this venue refuses, each as
+#: ``tag -> (error code, why)``. Every one is a flow the core could not honour
+#: without pretending, so it is refused at the gateway before the engine sees
+#: it -- exactly where HKEX refuses an odd lot.
+UNSUPPORTED_ATTRIBUTES = (
+    (D.FLAG_AON, 16319, "All Or None orders are not implemented"),
+    (D.FLAG_MF, 16320, "Minimum Fill orders are not implemented"),
+    (D.FLAG_ON_STOP, 16422,
+     "stop-loss orders need the Stop Loss book, which is not implemented"),
+    (D.FLAG_GTC, 16326,
+     "Good Till Cancelled and Good Till Date are not implemented"),
+)
+
+#: ``ERR_INVALID_ORDER_PARAM``, the catch-all for an order this venue will not
+#: take for a reason with no more specific code.
+INVALID_ORDER_PARAM = 16415
+
+#: What a core rejection becomes on the wire.
+REJECT_TO_ERROR_CODE = {
+    RejectReason.UNKNOWN_SYMBOL: 16012,             # ERR_INVALID_SYMBOL
+    RejectReason.MARKET_CLOSED: 16000,              # ERR_MARKET_NOT_OPEN
+    RejectReason.EXCEEDS_QUANTITY_LIMIT: 16282,     # QUANTITY_EXCEEDS_ISSUED_CA
+    RejectReason.EXCEEDS_VALUE_LIMIT: 16600,        # ERR_ORD_VAL_EXCEEDED
+    RejectReason.DUPLICATE_ORDER: 16418,            # ERR_INVALID_ORDER
+    RejectReason.UNSUPPORTED_CHARACTERISTIC: 16415,
+    RejectReason.INVALID_QUANTITY: 16328,           # NOT_MULT_BOARD_LOT
+    RejectReason.INVALID_PRICE: 16415,
+    RejectReason.PRICE_OUTSIDE_BAND: 16284,         # PRICE_EXCEEDS_DAY_MIN_MAX
+    RejectReason.TICK_SIZE: 16283,                  # NOT_MULT_TICK_SIZE
+    RejectReason.POST_ONLY_WOULD_CROSS: 16415,
+    RejectReason.UNKNOWN_MPID: 16606,               # ERR_INVALID_CLIENT
+    RejectReason.OTHER: 16415,
+}
+
+#: What a refused cancel or amend becomes.
+CANCEL_REJECT_TO_ERROR_CODE = {
+    CancelRejectReason.TOO_LATE_TO_CANCEL: 16013,   # ERR_INVALID_ORDER_NUMBER
+    CancelRejectReason.UNKNOWN_ORDER: 16013,
+    CancelRejectReason.ALREADY_PENDING: 16115,      # ERR_MOD_CAN_REJECT
+    CancelRejectReason.DUPLICATE_CLORDID: 16418,
+    CancelRejectReason.PRICE_OUTSIDE_BAND: 16284,
+    CancelRejectReason.MISMATCHED_FIELD: 16115,
+    CancelRejectReason.OTHER: 16115,
+}
+
+#: A dialect failure has no session-level Reject to travel in -- NNF has none --
+#: so it becomes an ORDER_ERROR or a sign-on refusal carrying one of these.
+SESSION_FAILURE_TO_ERROR_CODE = {
+    0: 16003,       # invalid tag number      -> ERR_BAD_TRANSACTION_CODE
+    2: 16003,       # undefined message type  -> ERR_BAD_TRANSACTION_CODE
+    5: 16415,       # value is incorrect      -> ERR_INVALID_ORDER_PARAM
+    6: 16415,       # incorrect data format
+    11: 16003,      # invalid MsgType
+}
+
+#: The order status a report carries. NNF has no OrdStatus field -- what an
+#: order's state *is* comes from the transaction code and the running totals --
+#: so this exists only to decide which transaction code to send.
+TERMINAL_STATUSES = frozenset((OrderStatus.FILLED, OrderStatus.CANCELLED,
+                               OrderStatus.REJECTED, OrderStatus.EXPIRED))
+
+
+def error_for(reason, table, default=INVALID_ORDER_PARAM):
+    """The published error code for a core rejection reason."""
+    return table.get(reason, default)
+
+
+# -- order attributes from the flag bits -------------------------------------
+
+def time_in_force(message):
+    """The core time-in-force a message's flag bits ask for.
+
+    NSE has no ``TimeInForce`` field: Day, IOC, GTC and the rest are bits of
+    ``ST_ORDER_FLAGS``, and an order that sets none of them is a Day order,
+    which is the default the document describes.
+    """
+    if message.get(D.FLAG_IOC) == "Y":
+        return TimeInForce.IOC
+    return TimeInForce.DAY
+
+
+def order_type(message):
+    """Limit unless the Market or ATO bit says otherwise.
+
+    ``Mkt`` is a market order in continuous trading and ``ATO`` is its pre-open
+    equivalent -- an order with no price, to be executed at whatever the
+    uncrossing decides. The core has one concept for both, because to a book
+    they are the same thing: an order with no price.
+    """
+    if message.get(D.FLAG_MARKET) == "Y" or message.get(D.FLAG_ATO) == "Y":
+        return OrderType.MARKET
+    return OrderType.LIMIT
+
+
+def set_flags(message, order, preopen=False):
+    """Write an order's characteristics back onto a report.
+
+    Every bit is written, set or not, because the field travels either way and a
+    client reads all sixteen of them.
+    """
+    market = order.order_type == OrderType.MARKET
+    flags = {
+        D.FLAG_ATO: market and preopen,
+        D.FLAG_MARKET: market and not preopen,
+        D.FLAG_ON_STOP: False,
+        D.FLAG_DAY: order.time_in_force == TimeInForce.DAY,
+        D.FLAG_GTC: False,
+        D.FLAG_IOC: order.time_in_force in TimeInForce.IMMEDIATE,
+        D.FLAG_AON: False,
+        D.FLAG_MF: False,
+        D.FLAG_MATCHED_IND: False,
+        D.FLAG_TRADED: order.cum_qty > 0,
+        D.FLAG_MODIFIED: order.orig_cl_ord_id is not None,
+        D.FLAG_FROZEN: False,
+        D.FLAG_PREOPEN: preopen,
+        D.FLAG_STPC: False,
+    }
+    for tag, value in flags.items():
+        message.set(tag, "Y" if value else "N")
+
+
+# -- the daily price range ---------------------------------------------------
+
+class CircuitFilter(object):
+    """NSE's operating range, in the shape ``Instrument`` expects.
+
+    The band is a **percentage of the base price**, and it is set per security
+    rather than by a published price ladder: a scrip carries a 2, 5, 10 or 20
+    per cent filter, and two securities at the same price can carry different
+    ones. So it cannot be a row in a threshold table the way Japannext's bands
+    are, and it is a small object with the same ``limits_for`` interface
+    instead -- exactly what HKEX's multiplicative nine-times rule needed.
+
+    Arithmetic is on integer price units throughout, so a twenty per cent band
+    on 1543.25 is exact rather than 1234.5999999999999.
+    """
+
+    __slots__ = ("percent", "name")
+
+    def __init__(self, percent, name=None):
+        self.percent = int(percent)
+        self.name = name or "%d%% circuit filter" % self.percent
+
+    def band_for(self, base_price):
+        return int(base_price) * self.percent // 100
+
+    def limits_for(self, base_price):
+        """The (low, high) limits around a base price.
+
+        The lower limit is floored at one price unit, as every band table here
+        is: a limit of zero or below is not a tradeable price.
+        """
+        band = self.band_for(base_price)
+        return max(1, int(base_price) - band), int(base_price) + band
+
+    def __len__(self):
+        return 1
+
+
+#: The bands NSE actually assigns. A security naming anything else is a
+#: reference-data error rather than something to be quietly accepted.
+PERMITTED_BANDS = (2, 5, 10, 20)
+
+
+# -- limits ------------------------------------------------------------------
+
+def default_limits(max_order_value=None, max_quantity=None):
+    """What the standard validator enforces at this venue.
+
+    ``require_round_lot`` is on, but the equity segment's board lot is one
+    share, so it only ever bites on a security whose lot is larger.
+    ``min_qty_requires_ioc`` is irrelevant here -- minimum fill is refused
+    outright -- and is left at its default rather than turned off, so that
+    turning MF on later does not silently inherit a permissive setting.
+    """
+    return ValidationLimits(
+        max_order_value=max_order_value,
+        max_quantity=max_quantity,
+        require_round_lot=True,
+        require_tick=True,
+        enforce_price_band=True,
+        allowed_order_types=(OrderType.LIMIT, OrderType.MARKET),
+        allowed_time_in_force=(TimeInForce.DAY, TimeInForce.IOC),
+    )
+
+
+ASSUMPTIONS = [
+    "The Gateway Router's TLS version is configurable. The specification "
+    "requires TLS 1.3, which the RHEL 8 target's Python supports and the "
+    "Windows development interpreter (OpenSSL 1.0.2) does not. Set "
+    "gateway_router.tls to '1.2' or 'none' for local work only.",
+
+    "The dynamic half of the cryptographic IV is written big-endian. The "
+    "specification gives it as a C 'long long' inside a struct and does not "
+    "say how it is laid out once incremented; big-endian matches every other "
+    "multi-byte value in the protocol. NewCipher(dynamic_big_endian=False) is "
+    "the other reading.",
+
+    "The counter in that IV rises for member-to-exchange traffic and falls for "
+    "exchange-to-member traffic. The document states only the member's rule "
+    "-- increment before encryption, decrement before decryption -- which "
+    "cannot work if both ends apply it to the same copy. Two sequences walking "
+    "away from one origin is the only reading that both matches the text and "
+    "keeps GCM's requirement that an IV never repeat under a key.",
+
+    "The heartbeat drop-counter threshold is 10. The document says a member "
+    "connection is dropped when the counter 'reaches the threshold value set "
+    "by the exchange' without naming it.",
+
+    "SYSTEM_INFORMATION_DATA is 94 bytes. The appendix's summary table says "
+    "90; Chapter 3's own table for the structure lists fields reaching 94. The "
+    "detailed table is taken as authoritative.",
+
+    "The password is not verified. A simulator holds no credential store, and "
+    "SIGN_ON_REQUEST_IN is accepted on a configured User ID whatever password "
+    "it carries.",
+
+    "Order numbers are assigned sequentially from 1 rather than in NSE's own "
+    "encoding, which the specification does not publish. They are unique, "
+    "monotonic and fit the DOUBLE the wire carries, which is everything a "
+    "client can rely on.",
+
+    "The daily price range comes from the 'band' column of securities.csv, "
+    "since NSE sets the operating range per scrip rather than by a published "
+    "price ladder. price_bands.csv holds a single permissive fallback row.",
+
+    "The tick is five paise at every price. NSE has revised the tick before, "
+    "so it stays a table (reference/tick_sizes.csv) rather than a constant.",
+]
+
+#: Flows that are deliberately unbuilt, and refused rather than half-simulated.
+#: Kept beside ASSUMPTIONS because a reader looking for one wants the other.
+NOT_IMPLEMENTED = [
+    "Every book but Regular Lot: Special Terms, Stop Loss, Odd Lot, Spot, "
+    "Auction and Call Auction 2 are rejected with ERR_INVALID_BOOK_TYPE.",
+    "All Or None and Minimum Fill orders, rejected with the security-level "
+    "codes 16319 and 16320.",
+    "Disclosed quantity: the core has no replenishment concept, and accepting "
+    "the field while ignoring it would be the worst of both.",
+    "Good Till Cancelled and Good Till Date.",
+    "Trade modification and cancellation (5440/5445), and the freeze and "
+    "approval flow (2170).",
+    "The UDP multicast broadcast feed. It is LZO-compressed, and LZO cannot be "
+    "written under this project's standard-library-only constraint. Market "
+    "data is on the control plane, the CLI and the board instead.",
+    "Market-wide index circuit breakers.",
+]
+
+
+def describe_transaction(code):
+    """The published name of a transaction code, for a log line."""
+    return X.NAMES.get(code, str(code))

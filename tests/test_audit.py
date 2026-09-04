@@ -32,6 +32,7 @@ from exchangesim.venues.hkex import dictionary as H
 from exchangesim.venues.japannext import dictionary as J
 
 from .hkexsupport import VenueHarness as HkexHarness
+from .nsesupport import VenueHarness as NseHarness
 from .jnxsupport import VenueHarness
 
 
@@ -654,6 +655,10 @@ class AuditedCommandsTest(unittest.TestCase):
         "smp.register", "smp.clear", "auction.lock", "auction.reference",
     ))
 
+    NSE_ONLY = frozenset((
+        "box.kill",
+    ))
+
     def audited(self, harness):
         return frozenset(command.name
                          for command in harness.registry.commands()
@@ -672,6 +677,13 @@ class AuditedCommandsTest(unittest.TestCase):
         register_builtin(harness.registry)
 
         self.assertEqual(self.SHARED | self.HKEX_ONLY, self.audited(harness))
+
+    def test_nse_adds_only_its_own_mutating_command(self):
+        harness = NseHarness()
+        self.addCleanup(harness.close)
+        register_builtin(harness.registry)
+
+        self.assertEqual(self.SHARED | self.NSE_ONLY, self.audited(harness))
 
     def test_no_built_in_command_is_audited(self):
         """`auth` carries a token; the rest are housekeeping a client repeats."""

@@ -201,6 +201,20 @@ DOWNLOAD_COUNT = 9301
 
 # -- value domains -----------------------------------------------------------
 
+#: What a numeric field holds when nobody set it. Chapter 2 is explicit -- "all
+#: numeric data must be set to zero (0) before sending to the host, unless a
+#: value is assigned to it" -- and in a fixed-width protocol there is no other
+#: way to say "absent": the field travels either way. So zero is a legal value
+#: of every enumeration below whose own domain does not already use it, and it
+#: is labelled rather than left as a bare 0 in the audit.
+#:
+#: It is *not* added to MarketStatus or UserType, where zero means PreOpen and
+#: Corporate Manager -- real values that would be hidden by pretending
+#: otherwise. Refusing an order that names no side is the gateway's business,
+#: and it does: the side maps to None and the engine rejects it.
+NOT_SET = "0"
+
+
 class BuySell(object):
     """``BuySell``: the same 1/2 FIX spells on tag 54, so no mapping is needed."""
 
@@ -266,6 +280,13 @@ class Flag(object):
 
 # -- fields ------------------------------------------------------------------
 
+def _with_not_set(labels):
+    """Name the zero an unset numeric field carries, rather than showing a 0."""
+    named = dict(labels)
+    named.setdefault(NOT_SET, "NOT_SET")
+    return named
+
+
 def _number(tag, name, digits=None):
     return FieldDef(tag, name, FieldType.INT, max_digits=digits)
 
@@ -318,14 +339,14 @@ def application_fields():
         _text(ORDER_NUMBER, "OrderNumber", 20),
         _text(ACCOUNT_NUMBER, "AccountNumber", 10),
         FieldDef(BOOK_TYPE, "BookType", FieldType.STRING,
-                 values=(BookType.REGULAR_LOT, BookType.SPECIAL_TERMS,
+                 values=(NOT_SET, BookType.REGULAR_LOT, BookType.SPECIAL_TERMS,
                          BookType.STOP_LOSS, BookType.ODD_LOT, BookType.SPOT,
                          BookType.AUCTION, BookType.CALL_AUCTION1,
                          BookType.CALL_AUCTION2),
-                 labels=enum_labels(BookType)),
+                 labels=_with_not_set(enum_labels(BookType))),
         FieldDef(BUY_SELL, "BuySell", FieldType.STRING,
-                 values=(BuySell.BUY, BuySell.SELL),
-                 labels=enum_labels(BuySell)),
+                 values=(NOT_SET, BuySell.BUY, BuySell.SELL),
+                 labels=_with_not_set(enum_labels(BuySell))),
         FieldDef(DISCLOSED_VOL, "DisclosedVol", FieldType.QTY),
         FieldDef(DISCLOSED_VOL_REMAINING, "DisclosedVolRemaining", FieldType.QTY),
         FieldDef(TOTAL_VOL_REMAINING, "TotalVolRemaining", FieldType.QTY),
@@ -344,8 +365,8 @@ def application_fields():
         _text(OE_REMARKS, "OERemarks", 25),
         _text(SETTLOR, "Settlor", 12),
         FieldDef(PRO_CLIENT, "ProClient", FieldType.STRING,
-                 values=(ProClient.CLIENT, ProClient.PRO),
-                 labels=enum_labels(ProClient)),
+                 values=(NOT_SET, ProClient.CLIENT, ProClient.PRO),
+                 labels=_with_not_set(enum_labels(ProClient))),
         _number(SETTLEMENT_TYPE, "SettlementType"),
         _text(NNF_FIELD, "NNFField", 20),
         _text(EXEC_TIMESTAMP, "ExecTimeStamp", 20),
