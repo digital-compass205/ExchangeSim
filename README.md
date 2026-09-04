@@ -2,20 +2,28 @@
 
 A self-hosted exchange simulator you can run on your own machine or in a CI job.
 It stands in for a venue's test environment: your trading client connects over
-FIX and cannot tell the difference, but you can open and close the market
-whenever you like, watch the order book in a browser, place orders by hand, and
-read back every message that crossed the wire.
+the venue's own protocol and cannot tell the difference, but you can open and
+close the market whenever you like, watch the order book in a browser, place
+orders by hand, and read back every message that crossed the wire.
 
-Two venues ship today:
+Three venues ship today:
 
 | Venue | Protocol | Port | Control port |
 |---|---|---|---|
 | **Japannext PTS** equities | FIX 4.2 | 9001 | 9101 |
 | **HKEX securities market** (SEHK) | OCG-C — binary encoding | 9011 | 9102 |
 | | OCG-C — the same protocol as FIX 5.0 SP2 over FIXT.1.1 | 9012 | |
+| **NSE India** Capital Market | NNF Trimmed Protocol | 9021 | 9103 |
+| | NNF — the Gateway Router that issues the keys | 9022 | |
 
 HKEX publishes OCG-C in two interchangeable encodings and this serves both, on
 one set of books: a binary client and a FIX client trade with each other.
+
+NSE is not FIX at all. Its members speak the NNF Trimmed Protocol: fixed-width,
+big-endian, encrypted with AES-256-GCM under a key collected from a separate
+Gateway Router connection, and with a *box* — one TCP connection — carrying
+several signed-on users at once. All of that is served, including the pre-open
+call auction.
 
 A real venue's UAT is open only during published windows, needs booked slots and
 credentials, is shared with everyone else, and cannot be told to halt a stock
@@ -53,7 +61,7 @@ Python 3.6 or newer, standard library only. On RHEL 8 that is
 
 ## Start it
 
-One command brings up both venues and the web board, each in its own process,
+One command brings up every venue and the web board, each in its own process,
 each logging to its own file under `var/log`:
 
 ```bash
@@ -63,7 +71,8 @@ bin/exchangesim start          # or: python -m exchangesim.ctl.main start
 ```
 japannext    started (pid 24191)  fix=9001 control=9101
 hkex         started (pid 24192)  fix=9012 binary=9011 control=9102
-web          started (pid 24193)  http=9200
+nse          started (pid 24193)  nnf=9021 router=9022 control=9103
+web          started (pid 24194)  http=9200
 ```
 
 Open **<http://127.0.0.1:9200>**.
@@ -170,7 +179,7 @@ and a price, choose Day, IOC or FOK, and send.
 * **Clicking a price on the depth board** fills the price field, which is the
   quickest way to be certain the price is on a valid tick.
 * **Up and down arrows in the price field** step one row along the depth board.
-  That is not a fixed step: tick size changes with price at both venues, and
+  That is not a fixed step: tick size changes with price at some venues, and
   walking the venue's own rows is the only way to stay aligned across a
   threshold.
 * **Quantity steps by the instrument's board lot**, which differs by security —
@@ -244,13 +253,14 @@ venue could not accept are recorded too, with the reason:
 
 ## Connecting your own client
 
-The shipped configs define two sessions per venue, ready to use:
+The shipped configs define ready-made sessions on every venue:
 
-| Venue | Host:port | SenderCompID (venue) | TargetCompID (you) |
+| Venue | Host:port | Venue identity | Your identity |
 |---|---|---|---|
 | Japannext | `127.0.0.1:9001` | `JNXSIM` | `CLIENT1`, `CLIENT2` |
 | HKEX, binary | `127.0.0.1:9011` | `HKEXSIM` | `BROKER3` |
 | HKEX, FIX | `127.0.0.1:9012` | `HKEXSIM` | `BROKER1`, `BROKER2` |
+| NSE | `127.0.0.1:9021` | — | Box 1 (broker `10123`): users `40521`, `40522`; Box 2 (broker `10456`): user `40777` |
 
 **Japannext** is FIX 4.2 (`BeginString=FIX.4.2`). Logon needs
 `EncryptMethod(98)=0` and `HeartBtInt(108)`; `ResetSeqNumFlag(141)=Y` is
@@ -293,12 +303,40 @@ Trade and not Make Markets, since quoting is not implemented. A session with no
 `broker_ids` is answered with `RequestResult=2`, no data found, rather than an
 invented broker.
 
-`CLIENT1`, `BROKER1` and `BROKER3` have **Cancel on Disconnect** switched on, so their
-resting orders are pulled when the socket closes; `CLIENT2` and `BROKER2` do
-not. That catches people out — if orders you placed keep vanishing, that is why.
+**NSE** is the NNF Trimmed Protocol, and connecting is a three-step sequence
+rather than a Logon. Optionally dial the **Gateway Router on 9022** first and
+send `GR_REQUEST (2400)` naming your Box ID; the response carries the gateway
+address, a session key, a 256-bit cryptographic key, a 128-bit IV and a 96-bit
+additional key. Then open the gateway connection on **9021** and send, in order:
+`SECURE_BOX_REGISTRATION_REQUEST (23008)` — the last message in clear —
+`BOX_SIGN_ON_REQUEST (23000)`, and then `SIGN_ON_REQUEST (2300)` for each user.
+A connection is a *box*, so several users share one, and dropping it signs off
+all of them.
 
-To change ports, comp IDs or add sessions, edit the `fix` block of the venue's
-config file and restart it.
+Everything after registration is AES-256-GCM, in whichever of the two published
+methodologies `gateway_router.encryption` names. Set
+`nnf.require_encryption: false` (the default) to skip the router entirely while
+you are bringing a client up: the box then runs in clear, which the protocol
+also defines.
+
+A security is `Symbol` **and** `Series` — `INFY` + `EQ` — because neither names
+one alone, and everything the venue says back uses both. There is **no client
+order ID**: the `ORDER_CONFIRMATION (2073)` is where you learn the
+`OrderNumber`, and it is what you amend and cancel by. Order type and
+time-in-force are bits of `ST_ORDER_FLAGS`, not fields. Prices are sent in
+paise. Only the Regular Lot book of the Normal market trades; every other book,
+along with All Or None, minimum fill, disclosed quantity and GTC, is refused
+with its published error code — run `exsim --port 9103 call venue.assumptions`
+for the full list.
+
+`CLIENT1`, `BROKER1`, `BROKER3` and NSE user `40521` have **Cancel on Disconnect**
+switched on, so their resting orders are pulled when the socket closes;
+`CLIENT2`, `BROKER2` and the other NSE users do not. That catches people out —
+if orders you placed keep vanishing, that is why.
+
+To change ports, identities or add sessions, edit the `fix` block of the
+venue's config file — or the `nnf` block at NSE, where a session is a user
+inside a box — and restart it.
 
 ## The command line
 
@@ -369,8 +407,10 @@ One JSON file per venue, in `config/`. The keys you are most likely to touch:
 |---|---|
 | `control.port` | the port `exsim` and the web board connect to |
 | `control.token` | a shared secret, if you want one; `null` means open |
-| `fix.port` | where your client connects |
+| `fix.port` | where your client connects (`nnf.port` at NSE) |
 | `fix.sessions` | one entry per client: comp ID, heartbeat, cancel-on-disconnect |
+| `nnf.boxes` | at NSE: one entry per connection, each listing the users that may sign on over it |
+| `gateway_router` | at NSE: the port that issues the keys, and which encryption methodology to use |
 | `markets` | which markets exist and what phase each starts in |
 | `audit.capacity` | how many messages the audit keeps; `0` switches it off |
 | `log.max_bytes` | size at which the venue rotates its own log; `0` to never |
@@ -407,6 +447,11 @@ config/         one file per venue, plus the web board's and services.json
 scenarios/      example scenarios; the CI suite
 var/            runtime state: logs, pidfiles, FIX sequence stores
 exchangesim/    the simulator itself
+  core/         books, matching, auctions -- knows no protocol
+  fix/          tag=value FIX
+  binary/       HKEX's binary encoding of the same protocol
+  nnf/          NSE's native protocol, and the AES-256-GCM it runs under
+  wire/         what all three share
   venues/       one package per exchange, with its reference data as CSV
   web/          the browser board
   cli/          exsim
@@ -421,7 +466,7 @@ change.
 ## Further reading
 
 **[DETAILED_DOC.md](DETAILED_DOC.md)** — the architecture and its seams, how the
-two venues differ and why, the auction mechanics, the price rules, the control
+the venues differ and why, the auction mechanics, the price rules, the control
 command surface, writing scenarios, deployment, development notes, the published
 specifications each behaviour came from, and every place a specification was
 silent and a choice had to be made.

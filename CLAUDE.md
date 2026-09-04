@@ -4,12 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An exchange simulator that stands in for a venue's test environment in CI/CD. Two venues: Japannext PTS equities over FIX 4.2, and the HKEX securities market over OCG-C, covering board-lot continuous trading and the POS/CAS call auctions. HKEX publishes OCG-C in **two encodings of one protocol** -- FIX 5.0 SP2 on a FIXT.1.1 session, and a fixed-width binary format -- and both are served, on one set of books. See `README.md` for the user guide, `DETAILED_DOC.md` for architecture, venue rules and known gaps, and `docs/specs/README.md` for what each specification required.
+An exchange simulator that stands in for a venue's test environment in CI/CD. Three venues:
+
+- **Japannext PTS** equities over FIX 4.2.
+- **HKEX securities** over OCG-C, covering board-lot continuous trading and the POS/CAS call auctions. HKEX publishes OCG-C in **two encodings of one protocol** -- FIX 5.0 SP2 on a FIXT.1.1 session, and a fixed-width binary format -- and both are served, on one set of books.
+- **NSE India Capital Market** over the NNF Trimmed Protocol, covering the Regular Lot book and the pre-open call auction. This one is **not FIX in any encoding**: a proprietary fixed-width big-endian format with its own sign-on, no sequence numbers, no resend, an exchange-assigned order number in place of a client order ID, AES-256-GCM on every message, and a connection that is a *box* carrying many signed-on users.
+
+See `README.md` for the user guide, `DETAILED_DOC.md` for architecture, venue rules and known gaps, and `docs/specs/README.md` for what each specification required.
 
 **Hard constraints, both deliberate:**
 
 - **Python 3.6.8, standard library only.** No third-party packages at build or run time. The target is RHEL 8's `/usr/libexec/platform-python`. No `dataclasses`, no `datetime.fromisoformat`, no `asyncio.run`/`create_task`, no walrus. f-strings, PEP 526 annotations and insertion-ordered dicts are fine.
-- **Fidelity to the published specification beats convenience.** Venue behaviour is transcribed from the PDFs listed in `docs/specs/README.md`. Where a spec is silent, mark the choice `ASSUMPTION` in code and add it to `ASSUMPTIONS` in that venue's `rules.py` so `exsim assumptions` reports it. Do not quietly invent venue behaviour — and prefer refusing a flow outright to half-simulating it, which is why an HKEX odd-lot order is rejected rather than treated as a board lot.
+- **Fidelity to the published specification beats convenience.** Venue behaviour is transcribed from the PDFs listed in `docs/specs/README.md`. Where a spec is silent, mark the choice `ASSUMPTION` in code and add it to `ASSUMPTIONS` in that venue's `rules.py` so `exsim assumptions` reports it. Do not quietly invent venue behaviour — and prefer refusing a flow outright to half-simulating it, which is why an HKEX odd-lot order is rejected rather than treated as a board lot, and why every NSE book but Regular Lot is refused with its published error code.
 
 ## Commands
 
@@ -22,7 +28,7 @@ $PY -m unittest discover -s tests -t .    # full suite (~1250 tests, a few secon
 $PY -m unittest tests.test_matching       # one module
 $PY -m unittest tests.test_matching.SelfTradePreventionTest.test_cancel_newest_cancels_the_incoming_balance
 
-$PY -m exchangesim.ctl.main start                        # both venues + the board, backgrounded
+$PY -m exchangesim.ctl.main start                        # every venue + the board, backgrounded
 $PY -m exchangesim.ctl.main status                      # pids, ports, uptime, log sizes
 $PY -m exchangesim.ctl.main logs hkex -n 40             # tail one service (-f follows)
 $PY -m exchangesim.ctl.main restart hkex                # one service, others untouched
@@ -32,6 +38,7 @@ $PY -m exchangesim.ctl.main check                       # every service's config
 $PY -m exchangesim.runner.main --config config/japannext.json --check   # validate one config
 $PY -m exchangesim.runner.main --config config/japannext.json           # one venue, foreground
 $PY -m exchangesim.runner.main --config config/hkex.json                # binary 9011, FIX 9012, control 9102
+$PY -m exchangesim.runner.main --config config/nse.json                 # NNF 9021, gateway router 9022, control 9103
 
 $PY -m exchangesim.web.main --config config/web.json    # web board on :9200 (its own process)
 
@@ -39,7 +46,9 @@ $PY -m exchangesim.cli.exsim info                       # control CLI ($EXSIM_MA
 $PY -m exchangesim.cli.exsim --port 9102 audit          # every message and command recorded
 $PY -m exchangesim.cli.exsim --port 9102 audit --seq 7  # one entry, field by field
 $PY -m exchangesim.cli.exsim --port 9102 instruments    # same CLI, any venue
-$PY -m exchangesim.scenario.runner "scenarios/*.json"   # end-to-end suite; needs *both* venues running
+$PY -m exchangesim.cli.exsim --port 9103 call boxes    # NSE: the connections, as against the users on them
+$PY -m exchangesim.cli.exsim --port 9103 call preopen  # NSE: the indicative auction price, security by security
+$PY -m exchangesim.scenario.runner "scenarios/*.json"   # end-to-end suite; needs *every* venue running
 
 $PY tools/pdftext.py spec.pdf --grep OrdType            # read venue spec PDFs (stdlib only)
 ```
@@ -55,36 +64,59 @@ $PY tools/pdftext.py spec.pdf --grep OrdType            # read venue spec PDFs (
 Three layers with a hard dependency rule: **`core/` may not import from `venues/` or any protocol gateway.** Arrows point inwards only.
 
 ```
-  FIX gateway (venues/japannext/handlers.py)   wire dialect
-        | commands v            ^ events
-  ------------------------------------------------------
-  Venue module (venues/japannext/)             rules, reference data, mapping
+  Wire      fix/  (tag=value)   binary/  (OCG-C)   nnf/  (NSE)
+            shared: wire/acceptor.py, wire/values.py, fix/message.py
         |
   ------------------------------------------------------
-  Core (core/)                                 book, matching, lifecycle, state
+  Gateway   venues/<venue>/handlers.py          dialect, mapping
+        | commands v            ^ events
+  ------------------------------------------------------
+  Venue     venues/<venue>/                     rules, reference data
+        |
+  ------------------------------------------------------
+  Core      core/                               book, matching, lifecycle, state
 ```
 
-Gateways turn wire messages into `core/commands.py` requests and `core/events.py` events back into wire messages. The core never builds a FIX field; the gateway never touches the book. Adding an exchange is a new package under `venues/` plus a line in `venues/registry.py`.
+Every wire format turns bytes into the same `fix/message.py:Message` and back,
+behind the seam `fix/codec.py:FixCodec` names — `framer`, `extract`, `decode`,
+`encode`, `is_admin`, `raw_string`, and `prepare`/`logon_defaults` for the
+client half a scripted scenario uses. **If you find yourself branching on a
+protocol name outside a gateway, the branch is in the wrong place.**
 
-**How well that held for the second venue.** HKEX needed four core additions, and each one is a capability the core was missing rather than a Hong Kong special case: market orders in `matching.py`, self-match prevention keyed on the order (`Order.stp_id` / `stp_instruction`) alongside the existing per-market mode, `ExecInst.IGNORE_PRICE_CHECK`, and `CancelReason.MASS_CANCEL`. The session layer gained four `SessionConfig` options for FIXT.1.1 — all default off, so FIX 4.2 behaviour is byte-identical. Nothing in `core/` learned the word "HKEX". If a third venue needs a core change, that is the bar: does the core lack a *concept*, or are you smuggling in a dialect?
+Gateways turn wire messages into `core/commands.py` requests and `core/events.py` events back into wire messages. The core never builds a FIX field; the gateway never touches the book. Adding an exchange is a new package under `venues/` plus a line in `venues/registry.py` — and, if it does not speak a protocol already here, a new package beside `fix/` and `binary/`.
 
-A new venue also inherits its whole control surface: `venues/common_commands.py` holds every venue-agnostic command (trading state, instruments, market data, orders, behaviour, sessions) and a venue's own `commands.py` calls `common_commands.register(registry, venue)` before adding what only it can provide. For Japannext that residue is one command, `venue.assumptions`; for HKEX it is that plus the SMP registry and `segments`. The test is mechanical: a command that needs `from .dictionary import ...` belongs to the venue, everything else is shared.
+**How well that held for the second venue.** HKEX needed four core additions, and each one is a capability the core was missing rather than a Hong Kong special case: market orders in `matching.py`, self-match prevention keyed on the order (`Order.stp_id` / `stp_instruction`) alongside the existing per-market mode, `ExecInst.IGNORE_PRICE_CHECK`, and `CancelReason.MASS_CANCEL`. The session layer gained four `SessionConfig` options for FIXT.1.1 — all default off, so FIX 4.2 behaviour is byte-identical. Nothing in `core/` learned the word "HKEX".
 
-### Where the two venues differ, and why it matters
+**And for the third, which is not FIX at all.** NSE needed **two** core additions, on the same test: does the core lack a *concept*, or are you smuggling in a dialect?
 
-Reach for the Japannext module as a template only after checking these, because each is a place where copying it would be wrong.
+- **An order named by the venue's own identifier.** `CancelRequest`/`ReplaceRequest` gained `order_id`, `OrderRegistry` tolerates a null ClOrdID, and `Engine._named_order` resolves by `by_order_id` **with an explicit ownership check** — the ClOrdID index is keyed by session and carries ownership for free, a global order-id map does not, and without the check one client could cancel another's order by guessing a number. Not an NSE quirk: it is the shape of every native non-FIX exchange API, and FIX itself has cancel-by-OrderID.
+- **Which tie-breaks a call auction applies.** `auction.uncross(book, reference, rules)` and `Market(auction_rules=...)`, defaulting to the five-rule chain that was there before. Maximising the matchable quantity is universal; resolving a remaining tie in the direction of the surplus is not, and NSE has no such rule — a shared chain would have given one venue the other's price, silently and only sometimes.
 
-| | Japannext | HKEX |
-|---|---|---|
-| Session | FIX 4.2, ResendRequest recovery, client may reset at Logon | FIXT.1.1, `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** (use `session.reset`) |
-| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all |
-| Market routing | `TargetSubID(57)` per message | the security's `segment` column — no message names a market |
-| Price limits | one band table around the nominal price | **two** rules: the multiplicative 9-times rule against the nominal price (`rules.NineTimesRule`, not a table), and the quotation rule against the live BBO (`StandardValidator._check_quotation`) |
-| Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` |
-| Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` |
-| Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message |
-| Acknowledgement | only for an order that rests untraded | **before** matching -- `Market(ack_on_entry=True)` |
-| Encodings | tag=value FIX | tag=value FIX **and** binary, one port each, one session table |
+Everything else NSE needs is above the core. Nothing in `core/` learned the word "NSE", and `tests/test_auction.py` and `tests/test_hkex_auction.py` pass untouched, which is the evidence the second change was neutral. What *did* move is `Acceptor` and its router, from `fix/acceptor.py` to `wire/acceptor.py`: accepting a connection and binding it to a session is not FIX, and a third protocol needing it made that visible. `fix/acceptor.py` re-exports them, so no venue import and no existing test changed — which is the evidence for that one.
+
+A new venue also inherits its whole control surface: `venues/common_commands.py` holds every venue-agnostic command (trading state, instruments, market data, orders, behaviour, sessions) and a venue's own `commands.py` calls `common_commands.register(registry, venue)` before adding what only it can provide. For Japannext that residue is one command, `venue.assumptions`; for HKEX it is that plus the SMP registry and `segments`; for NSE it is `boxes`, `box.kill`, `gateway_router`, `preopen`, `preopen.lock` and `transactions`. The test is mechanical: a command that needs `from .dictionary import ...` belongs to the venue, everything else is shared.
+
+### Where the three venues differ, and why it matters
+
+Reach for any venue module as a template only after checking these, because each row is a place where copying one into another would be wrong.
+
+| | Japannext | HKEX | NSE |
+|---|---|---|---|
+| Protocol | FIX 4.2 | FIX 5.0 SP2, two encodings | **not FIX at all**: NNF, fixed-width, big-endian |
+| Session | ResendRequest recovery, client may reset at Logon | `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** (use `session.reset`) | no sequence numbers, no resend, no session-level Reject; recovery is a message download |
+| A connection is | a session | a session | a **box**, carrying many signed-on users; dropping it signs off every one |
+| Identity | CompID pair | CompID pair (one on the wire in binary) | a numeric User ID, over a numeric Box ID |
+| Order handle | `ClOrdID(11)` | `ClOrdID(11)` | **none**: amend and cancel name the exchange's own `OrderNumber` |
+| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all | `SEC_INFO`: Symbol **and** Series, neither of which names a security alone |
+| Market routing | `TargetSubID(57)` per message | the security's `segment` column — no message names a market | one market; the book type names it, and every book but Regular Lot is refused |
+| Price limits | one band table around the nominal price | **two** rules: the multiplicative 9-times rule against the nominal price (`rules.NineTimesRule`, not a table), and the quotation rule against the live BBO (`StandardValidator._check_quotation`) | a circuit filter that is a **percentage** of the base price, set **per security** (`rules.CircuitFilter`, from the `band` column) |
+| Order type and TIF | `OrdType(40)`, `TimeInForce(59)` | the same | **bits** of `ST_ORDER_FLAGS`; neither scalar field exists |
+| Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` | the pre-open, with a **four**-rule chain: no surplus-direction tie-break |
+| Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` | **none**, and a market configured with any mode is refused at start-up |
+| Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message | none; every field of a structure is always on the wire |
+| Acknowledgement | only for an order that rests untraded | **before** matching -- `Market(ack_on_entry=True)` | **before** matching, for the same reason and more sharply: the acknowledgement is where the client learns the order number |
+| Rejection | `OrdRejReason(103)` on an Execution Report | its own reject codes | a numeric `ErrorCode` in the header of the erroring form of the same transaction |
+| Encryption | none | none (the credential is opaque) | **AES-256-GCM on every message**, under a key collected from a separate Gateway Router port |
 
 Repeating groups needed **no codec change**: `Message` keeps fields ordered and offers `get_all`/`append`, so a group is read positionally. What that cannot do is check the count, so `hkex/handlers.py:_check_count` does, rejecting a mismatch with `SessionRejectReason=16`. Any new group needs the same.
 
@@ -107,17 +139,91 @@ Five things here are load-bearing.
 
 `Audit` entries carry the `protocol` that recorded them and are read back with `venue.wire_codec(...)`; a binary entry renders as a hex dump with credentials struck out, so the bytes line up with a client's own log.
 
+### The third protocol
+
+NNF is not an encoding of FIX and nothing here pretends it is. It gets its own
+stack, `nnf/`, beside `fix/` and `binary/`, and its own session layer — because
+`fix/session.py` is built on MsgSeqNum, resend, gap fill and a persistent store,
+and NNF has none of them. Decisively: **NNF has no session-level Reject.** A
+refusal is the `*_ERROR` or `*_REJECT` form of the transaction that caused it,
+carrying a numeric `ErrorCode` in the message header, so rejection belongs to
+the gateway. That is why the session hands a dialect failure back through
+`Application.on_invalid` instead of answering it itself.
+
+What **is** shared is `fix/message.py:Message`. Strip its docstring and it is an
+ordered list of numerically-keyed fields with a type discriminator, which is
+exactly what this protocol has — so the dictionary, the audit, the control
+plane, the CLI and the board all work here without knowing NNF exists. Three
+rules keep that from becoming a claim that NNF is FIX:
+
+- **A message type is the decimal transaction code**, as a string: `"2000"`, not
+  `"D"`. Nothing maps one onto the other, because there is no correspondence to
+  map. A code with no structure decodes to its own number, which no dialect
+  defines, and is refused by name.
+- **A FIX tag is reused only where the concept and the value domain coincide**
+  — `Symbol(55)`, `Side(54)`, `OrderQty(38)`, `Price(44)`, `OrderID(37)` for the
+  exchange-assigned order number. `ClOrdID(11)` and `OrigClOrdID(41)` are
+  **not defined**, because NNF has no client handle and inventing one would put
+  an identifier no client ever sent into the order record and the audit;
+  `OrdType(40)` and `TimeInForce(59)` are not defined either, because NSE spells
+  both as bits. Everything else lives in a private range (9000s header, 9100s
+  body, 9200s one tag per bit, 9400+ reserved for Futures & Options).
+- **In a fixed-width protocol a dictionary checks values, not presence.** Every
+  field travels on every message, so `MessageDef.required` can never fail;
+  messages are validated with `check_unknown=False`. Reading it as presence
+  checking would give false confidence.
+
+Six things here are load-bearing.
+
+- **Offsets are transcribed, never computed.** Structures are `pragma pack 2`,
+  so an eight-byte `LONG LONG` genuinely sits at offset 14 of the header, and a
+  walk that summed widths would drift. Reserved runs are declared too, which is
+  what makes `tests/test_nse_dictionary.py`'s check strict: the fields of each
+  structure must reach **exactly** the length the appendix tables — 290 for an
+  order, 228 for a trade, 276 for a sign-on. That test catches nearly every
+  transcription slip and costs nothing.
+- **Zero means "absent"**, for a price or an amend quantity, because the field
+  travels either way and there is no other way to say it. Read literally, an
+  amendment naming no quantity would amend every order down to nothing.
+- **A connection is a box and a session is a user.** Several users sign on over
+  one box, and disconnecting the box signs off every one. `manager.sessions`
+  answers with users, because that is what an order's owner and a report's
+  recipient mean; `manager.resolve_inbound` answers with boxes, because that is
+  what a connection is.
+- **Reports produced while a user is disconnected are dropped, not queued.**
+  That inverts the FIX invariant below, and it must: there is no resend to
+  deliver them. The client asks for a download instead.
+- **The audit records the plaintext packet, not the ciphertext.** Under the
+  existing encryption methodology the keystream runs continuously across the
+  whole connection, so a packet cannot be decrypted out of order — and
+  rendering an audit entry must not touch a live connection's state at all.
+  `NnfCodec.raw_string` therefore decrypts nothing.
+- **The IV counter rises towards the exchange and falls away from it.** The
+  document states only the member's rule — increment before encryption,
+  decrement before decryption — which cannot work if both ends apply it to one
+  copy. Two sequences walking away from one origin is the only reading that
+  matches the text and keeps GCM's requirement that an IV never repeat.
+
+`nnf/` knows nothing about a market segment: which tag is the User ID, which is
+the Box ID and which code is the heartbeat are all arguments. That is what
+`tests/test_nnf_codec.py` pins, with a layout defined in the test file, and it
+is what lets Futures & Options land later as a second dictionary and a second
+set of layouts over the same machinery.
+
 ### Auctions
 
-`core/auction.py` finds one price and executes everything at it; `venues/hkex/auctions.py` holds what HKEX wraps around that. The split is the usual one — the rule chain (maximum volume, lowest imbalance, surplus direction, closest to the reference price, higher of two) is the standard call auction and belongs to the core; the reference price, the two-stage bands and the carried-forward-order treatment are the venue's.
+`core/auction.py` finds one price and executes everything at it; `venues/hkex/auctions.py` and `venues/nse/auctions.py` hold what each venue wraps around that. The split is the usual one — finding the price belongs to the core; the reference price, the bands and the carried-forward-order treatment are the venue's.
 
-Three things here are easy to get wrong:
+**Which tie-breaks apply is the venue's too, and that was a correction.** The chain was hard-coded as HKEX's five rules until a second venue turned out to have four: NSE's pre-open is maximum quantity, minimum unmatched, closest to the previous close, higher of two — with **no** surplus-direction rule. So `uncross(book, reference_price, rules)` takes the chain and `Market(auction_rules=...)` carries it, defaulting to `auction.STANDARD_RULES` so HKEX is unchanged. Maximising the matchable quantity is universal; almost nothing after it is.
+
+Four things here are easy to get wrong:
 
 - **An at-auction order has no price, so it cannot go in the sorted ladder.** `BookSide` keeps a separate FIFO for them, and they are deliberately excluded from `best_price`, `depth` and `orders_in_priority` — the BBO and the ita board are statements about limit prices. `orders()` and `__len__` *do* include them, so cancel-all and the order count stay honest. `orders_in_priority` is the continuous-matching iterator: a priceless resting order has no price to execute at, so it must never appear there.
-- **An auction price is only available when the limit books overlap.** A book holding nothing but at-auction orders has no price of its own, and HKEX then matches at the reference price instead — which is why `Market.uncross` falls back to it rather than treating "no IEP" as "no trade".
+- **An auction price is only available when the limit books overlap.** A book holding nothing but at-auction orders has no price of its own, and HKEX then matches at the reference price instead — which is why `Market.uncross` falls back to it rather than treating "no IEP" as "no trade". NSE does the same at the previous close, so the fallback is shared rather than one venue's habit.
+- **A priceless order is filled first.** At-market orders come off their FIFO before the limit book at the auction price, which is standard and is why an NSE pre-open with an ATO order on one side splits the fills the way it does.
 - **Uncrossing happens before the state change is applied.** `set_trading_state` calls `_close_auction` first, because moving to a closed state expires resting orders and a closing auction run afterwards would find an empty book.
 
-Auction periods are **command-driven**, like every other phase here: `state.set` opens the session, `auction.lock` ends the input period, `state.set` ends it and uncrosses. Do not add a scheduler — a random closing period would make a test's outcome depend on the clock.
+Auction periods are **command-driven**, like every other phase here: `state.set` opens the session, `auction.lock` (HKEX) or `preopen.lock` (NSE) ends the input period, `state.set` ends it and uncrosses. NSE's locked phase is its own published state — "Preopen ended", which the core calls `OPENING_AUCTION` — and the book is frozen at a price nothing has executed at yet. Do not add a scheduler: a random closing period would make a test's outcome depend on the clock.
 
 ### The audit
 
@@ -147,7 +253,7 @@ Four things here are deliberate and easy to undo by accident.
   mutating command is then recorded whether or not its author thought about it;
   the reverse mistake floods the tape and would be silent on a venue nobody has
   open, so `tests/test_audit.py:AuditedCommandsTest` pins the exact audited set
-  for both venues. Add a command, and that test tells you to choose.
+  for every venue. Add a command, and that test tells you to choose.
 
 Value meanings come from `enum_labels()` reversing the constant classes the
 dictionaries already feed to `FieldDef(values=…)`, so they cannot drift from the
@@ -162,7 +268,9 @@ These caused real bugs and are easy to reintroduce.
 
 **Events are produced as a batch, then rendered.** By render time the order has moved on. `OrderFilled` therefore snapshots `cum_qty`, `leaves_qty`, `notional_units` and `order_qty` at construction, and `_render_filled` restates them over whatever `_base_report` derived from the live order. Without this an IOC's partial fill reports `LeavesQty=0` (its post-cancellation value) and every fill of a multi-level sweep reports the final average price rather than its own running one. `OrderAccepted` snapshots for the same reason wherever a venue acknowledges before matching. Any new event that carries running totals needs the same treatment.
 
-**Whether an acceptance precedes the executions is a venue answer, not a FIX one.** Japannext reports Order Accepted only for an order that reaches the book untraded, so an order filled on entry is described once. HKEX acknowledges first and executes after -- its own flows show `ExecType=New, CumQty=0, LeavesQty=OrderQty` ahead of the fills (FIX 3.12 §6.6.1, §6.13.1) -- so `MatchingEngine.ack_on_entry` carries it, off by default, on for HKEX markets via `rules.ACK_BEFORE_EXECUTION`. The case that matters is an IOC that never rests: without the acknowledgement its expiry report is the first the client hears of the order, naming an `OrderID` it was never given, and a real gateway rejected exactly that. Emit the acceptance in one place only -- with the flag on, `_rest` must not repeat it for the remainder.
+**Messages sent while a session is disconnected are still numbered and persisted — at a venue that has a resend.** That is what makes FIX's Cancel on Disconnect work: the client discovers the gap at its next Logon and retrieves the reports. NSE inverts it and must: NNF has no resend, so `NnfSession.send` records an undelivered report to the audit and drops the bytes, and the client learns what it missed by asking for a download. Do not "fix" either one into the other.
+
+**Whether an acceptance precedes the executions is a venue answer, not a FIX one.** Japannext reports Order Accepted only for an order that reaches the book untraded, so an order filled on entry is described once. HKEX acknowledges first and executes after -- its own flows show `ExecType=New, CumQty=0, LeavesQty=OrderQty` ahead of the fills (FIX 3.12 §6.6.1, §6.13.1) -- so `MatchingEngine.ack_on_entry` carries it, off by default, on for HKEX and NSE markets via each venue's `rules.ACK_BEFORE_EXECUTION`. It matters most at NSE, where the acknowledgement is the *only* place a client learns the order number it must cancel by. The case that matters is an IOC that never rests: without the acknowledgement its expiry report is the first the client hears of the order, naming an `OrderID` it was never given, and a real gateway rejected exactly that. Emit the acceptance in one place only -- with the flag on, `_rest` must not repeat it for the remainder.
 
 **A book change is not the same thing as an event, and market data must be told about both.** `Market._absorb` publishes `book:` off the event batch, which is right for a submit or a cancel and wrong for an amend: reducing a quantity produces no event at all, and re-entry after a price change filters its `OrderAccepted` out — so the board kept showing the old size until `amend` began passing `changed=True`. Any future path that reaches into a book without producing an event needs the same flag.
 
@@ -228,16 +336,20 @@ Single-threaded `selectors` reactor (`core/reactor.py`), chosen over `asyncio` f
 | `tests/fixsupport.py` | FIX session layer against a fake transport |
 | `tests/jnxsupport.py` | full Japannext venue, real dictionary and engine, fake sockets |
 | `tests/hkexsupport.py` | the same for HKEX; its client helpers build the repeating groups, and `binary_venue_config()` puts a third broker on the binary encoding |
+| `tests/nnfsupport.py` | one NNF box over a fake socket, with a stub gateway: registration, box sign-on, user sign-on, heartbeats |
+| `tests/nsesupport.py` | the full NSE venue; a `BoxClient` is a connection and signs several users on over it |
 | `tests/support.py` | reactor and control plane over real loopback sockets |
 
-`scenarios/*.json` run against a **live** daemon over real sockets and are the artifact CI calls. They share one process per venue, so give each scenario distinct ClOrdIDs (the registry remembers them for the process lifetime) and bracket it with `orders.cancel_all`. A scenario names its own `fix_port`, `control_port`, `begin_string` and `logon_fields`, so `make smoke` starts every venue in `VENUES` and one runner invocation covers them all.
+`scenarios/*.json` run against a **live** daemon over real sockets and are the artifact CI calls. They share one process per venue, so give each scenario distinct ClOrdIDs (the registry remembers them for the process lifetime) and bracket it with `orders.cancel_all`. A scenario names its own `fix_port`, `control_port`, `begin_string`, `logon_fields` and `protocol`, so `make smoke` starts every venue in `SMOKE_SERVICES` and one runner invocation covers them all.
 
-**A green unit suite is not sufficient evidence.** Three bugs survived 500+ passing tests and were found only by starting the daemon and reading real FIX output. Before calling work done, run the venue and drive it.
+Two things a scenario against NSE needs that the others do not. There is **no one-message logon**: a box registers, signs on, and only then does a user sign on, so the sequence is scripted with `send` steps and the `logon` verb refuses. And the identifier a scenario cancels by is the **exchange's** to choose, so an `expect` step names what to remember (`"capture": {"order": "37"}`) and a later step refers to it as `"$order"` — without which a scenario passes once and fails on its second run in the same process.
+
+**A green unit suite is not sufficient evidence.** Three bugs survived 500+ passing tests and were found only by starting the daemon and reading real FIX output. Before calling work done, run the venue and drive it — and for a scenario, run it **twice**, because a shared process is what turns an identifier the venue assigned into a value a scenario cannot hard-code.
 
 ## Conventions
 
 - Commit at phase/feature boundaries, only once the full suite passes.
-- Venue reference data is CSV (`venues/*/reference/`) so a table correction is a data edit, never a code change. Anything unconfirmed is flagged `UNVERIFIED` in the file header — currently only Japannext's tick-size tables, because the Trading Rules appendices are merged-cell tables that text extraction cannot reconstruct unambiguously. Japannext's price band tables and HKEX's spread table are transcribed from the published rules and are exact.
+- Venue reference data is CSV (`venues/*/reference/`) so a table correction is a data edit, never a code change. Anything unconfirmed is flagged `UNVERIFIED` in the file header — Japannext's tick-size tables, because the Trading Rules appendices are merged-cell tables that text extraction cannot reconstruct unambiguously, and NSE's securities universe, whose symbols and lots are real but whose reference prices are plausible rather than quoted. Japannext's price band tables and HKEX's spread table are transcribed from the published rules and are exact.
 - **Boundary semantics in a threshold table are a real source of bugs.** `TickTable` rows apply from their bound *upwards*, but exchanges publish bands as "From 0.01 to 0.25 / Over 0.25 to 10.00" — so 0.25 belongs to the *lower* band and the next row's bound is 0.251, not 0.250. `tests/test_hkex.py:SpreadTableTest` checks both sides of every boundary against the Schedule for exactly this reason, and also asserts that every shipped base price is itself on-tick.
 - `.gitattributes` pins LF: development is on Windows, deployment is RHEL 8.
 

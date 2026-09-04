@@ -1,6 +1,6 @@
 # ExchangeSim — detailed documentation
 
-Everything beyond getting it running: how it is built, how the two venues
+Everything beyond getting it running: how it is built, how the three venues
 differ, what each behaviour was transcribed from, and where a specification was
 silent and a choice had to be made.
 
@@ -34,16 +34,17 @@ For installing, starting and using it, see **[README.md](README.md)**.
 | Capability | Detail |
 |---|---|
 | Order entry | New, amend (price and quantity), cancel, and mass cancel where the venue has it |
-| Order types | Whatever the venue supports: limit only at Japannext, limit and market at HKEX; TIF Day / IOC / FOK, post-only, IOC MinQty |
+| Order types | Whatever the venue supports: limit only at Japannext, limit and market at HKEX and NSE; TIF Day / IOC / FOK, post-only, IOC MinQty. At NSE the type and the time in force are bits of a flag word, not fields |
 | Matching | Order-driven continuous, price/time priority, executed at the **resting** order's price |
-| Auctions | Call auctions that uncross at one price: maximum volume, then lowest imbalance, then surplus direction, then closest to the reference price |
-| Crossing | Full book matching plus self-trade prevention, keyed on the MPID (Japannext) or on a client-supplied ID (HKEX) |
-| Markets | Japannext: four, addressed by `TargetSubID`. HKEX: one book per market segment, chosen by the security |
+| Auctions | Call auctions that uncross at one price. Which tie-breaks apply is the venue's: HKEX uses five rules, NSE four — its pre-open has no surplus-direction rule |
+| Crossing | Full book matching plus self-trade prevention, keyed on the MPID (Japannext) or on a client-supplied ID (HKEX). NSE has none, and refuses a market configured with any mode |
+| Markets | Japannext: four, addressed by `TargetSubID`. HKEX: one book per market segment, chosen by the security. NSE: one, the Normal market |
 | Market states | Pre-open, auctions, lunch break, open, closed, halted — venue-wide, per market, or per instrument |
 | Market data | Book, depth, BBO, trade tape and session statistics via CLI, with a live monitor |
 | Web board | Browser view over every running venue, live over Server-Sent Events |
 | Message audit | Every message in and out, and every mutating command, with each field named and each value explained |
-| Recovery | Persistent sequence numbers, ResendRequest, SequenceReset-GapFill, Cancel on Disconnect |
+| Recovery | Persistent sequence numbers, ResendRequest, SequenceReset-GapFill, Cancel on Disconnect — at the two FIX venues. NSE has no resend at all, and its message download is deliberately unbuilt |
+| Encryption | None at the FIX venues. NSE runs AES-256-GCM on every message, written by hand because the standard library has no cipher |
 | Negative testing | Forced rejects, delayed reports, dropped reports |
 
 Market state changes are **command-driven only** — there is no scheduler. A CI
@@ -59,13 +60,20 @@ exchangesim/
   core/         venue-agnostic: book, matching, orders, state machine,
                 market data, validation, prices, reactor
   fix/          protocol-generic FIX: codec, dictionary, session layer
-                (4.2 and FIXT.1.1), persistent store, acceptor, field naming
+                (4.2 and FIXT.1.1), persistent store, session table, field naming
   binary/       the second encoding OCG-C publishes: frame, data types,
                 presence map, and the codec that turns one into a fix.Message
+  nnf/          NSE's native protocol: big-endian data types, the Chapter 10
+                packet, AES-256-GCM by hand, fixed-offset structures, and a
+                session layer in which a connection is a box carrying many users
+  wire/         what every protocol here shares: the acceptor that binds a
+                connection to a session, and value conversion
   venues/
     common_commands.py  every venue-agnostic control command
     japannext/  the Japannext dialect, rules, handlers and reference data
     hkex/       the HKEX OCG-C dialect, likewise
+    nse/        the NSE Capital Market dialect, its structures, its circuit
+                filters and its pre-open
   web/          the browser board: its own process, a client of the venues
   control/      JSON-lines control server and command registry
   cli/          the exsim command-line client
@@ -76,27 +84,32 @@ config/         one JSON file per venue instance, the web board's, services.json
 scenarios/      example scenarios; the CI suite
 var/            runtime state: logs, pidfiles, FIX sequence stores
 tools/          pdftext.py, a stdlib PDF text extractor for reading venue specs
-tests/          1,273 tests, unittest only
+tests/          1,554 tests, unittest only
 ```
 
 Three layers with a hard dependency rule — arrows point inwards only, and
 `core/` may not import from `venues/` or from any protocol gateway:
 
 ```
-  FIX gateway            venue-specific wire dialect
+  Wire format            fix/ (tag=value)   binary/ (OCG-C)   nnf/ (NSE)
+      |                  all three produce the same fix.Message
+  ---------------------------------------------
+  Gateway                venue-specific dialect and mapping
       |  commands v          ^ events
   ---------------------------------------------
-  Venue module           validation rules, reference data, message mapping
+  Venue module           validation rules, reference data
       |
   ---------------------------------------------
   Venue-agnostic core    book, matching, lifecycle, state, market data
 ```
 
 Gateways turn wire messages into core commands and core events back into wire
-messages. The core never builds a FIX field; the gateway never touches the book.
-Adding an exchange is a new package under `venues/` plus one line in the
+messages. The core never builds a protocol field; the gateway never touches the
+book. Adding an exchange is a new package under `venues/` plus one line in the
 registry — and it inherits the whole control surface, the CLI and the web board
-without further work.
+without further work. Adding a *protocol* is a package beside `fix/` that
+implements the same six-method codec seam, which is what NSE needed and HKEX's
+second encoding did not.
 
 **How well that held for the second venue.** HKEX needed four core additions,
 and each is a capability the core was missing rather than a Hong Kong special
@@ -106,23 +119,28 @@ mass-cancel reason. The session layer gained four options for FIXT.1.1, all
 defaulting off, so FIX 4.2 behaviour is byte-identical. Nothing in `core/` knows
 the word "HKEX".
 
-### Where the two venues differ
+### Where the three venues differ
 
-| | Japannext | HKEX |
-|---|---|---|
-| Session | FIX 4.2, ResendRequest recovery, client may reset at Logon | FIXT.1.1, `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** |
-| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all |
-| Market routing | `TargetSubID(57)` per message | the security's segment — no message names a market |
-| Price limits | one band table around the nominal price | two rules: the 9-times rule and the quotation rule (see below) |
-| Auctions | none — the rules say so outright | POS and CAS |
-| Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)` |
-| Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message |
-| Acknowledgement | only for an order that reaches the book untraded | **before** matching: every accepted order is reported New first, then its executions |
-| Encodings | tag=value FIX | tag=value FIX **and** a binary encoding of the same protocol, on separate ports |
+| | Japannext | HKEX | NSE |
+|---|---|---|---|
+| Protocol | FIX 4.2 | FIX 5.0 SP2 over FIXT.1.1, in two encodings | NNF — not FIX in any encoding |
+| Session | ResendRequest recovery, client may reset at Logon | `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** | no sequence numbers, no resend, no session-level Reject |
+| A connection | is a session | is a session | is a **box**, carrying many signed-on users |
+| Order handle | `ClOrdID(11)` | `ClOrdID(11)` | **none** — the exchange's `OrderNumber` |
+| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all | Symbol **and** Series together |
+| Market routing | `TargetSubID(57)` per message | the security's segment — no message names a market | one market; the book type is checked and every book but Regular Lot refused |
+| Price limits | one band table around the nominal price | two rules: the 9-times rule and the quotation rule (see below) | a per-security circuit filter, as a percentage of the previous close |
+| Order type / TIF | `OrdType(40)`, `TimeInForce(59)` | the same | **bits** of `ST_ORDER_FLAGS` |
+| Auctions | none — the rules say so outright | POS and CAS, five tie-break rules | the pre-open, four tie-break rules |
+| Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)` | none |
+| Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message | none — every field is always on the wire |
+| Acknowledgement | only for an order that reaches the book untraded | **before** matching | **before** matching, and it is the only place the order number appears |
+| Rejection | `OrdRejReason(103)` | its own reject codes | a numeric `ErrorCode` on the erroring form of the same transaction |
+| Encryption | none | none | AES-256-GCM on every message |
 
 ### Acknowledgement before execution
 
-The two venues answer a question the FIX standard leaves open: when an
+The venues answer a question the FIX standard leaves open: when an
 aggressive order trades the moment it arrives, is it also reported *accepted*?
 
 Japannext's Order Accepted report describes an order that reached the book
@@ -398,9 +416,15 @@ orders  order.new  order.get  order.cancel  orders.cancel_all
 behaviour.set  behaviour.list  behaviour.clear
 sessions  session.reset  session.kill
 audit  audit.entry  audit.types
-venue.assumptions                       (both venues)
+venue.assumptions                       (every venue)
 smp  smp.register  smp.clear  auction  auction.lock  auction.reference  segments   (HKEX)
+boxes  box.kill  gateway_router  preopen  preopen.lock  transactions               (NSE)
 ```
+
+At NSE, `sessions` and `boxes` are two different populations and both are worth
+having: a *session* is a signed-on user, which is what an order's owner and a
+report's recipient mean, and a *box* is the connection several of them share.
+`box.kill` signs off every user on one, as the specification requires.
 
 `order.new` is **not** a second order path: it builds the same request a FIX
 gateway builds and hands it to the same engine, so band, tick, lot and
@@ -750,6 +774,19 @@ HKEX, from <https://www.hkex.com.hk> → Services → Trading → Securities:
 - *Trading Mechanism of the CAS in the Securities Market* — the reference price,
   the two-stage price limits, and the five IEP determination rules
 
+NSE India, from <https://www.nseindia.com/static/trade/platform-services-neat-trading-system-protocols>:
+
+- `TP_CM_Trimmed_NNF_PROTOCOL 6.6` — everything: the transaction codes and
+  structures, the Chapter 10 packet, the two encryption methodologies, the
+  order-flag bitfield and the whole error-code table. It is unusually complete
+  for a venue document, publishing the bitfields **twice**, once per byte order,
+  so the bit numbering here is a transcription rather than the assumption it had
+  to be at HKEX.
+- NSE circulars on the pre-open session — the equilibrium-price rule chain,
+  which the protocol document does not define
+- NSE circulars on tick size and the operating range — the five-paise tick and
+  the per-scrip circuit filter
+
 `tools/pdftext.py` extracts text from these PDFs using only the standard
 library, since reading them is a recurring need and the project takes no
 dependencies.
@@ -818,6 +855,57 @@ invalid message type rather than a half-answer. Beyond that:
   *enhanced* limit order allowance. OCG-C distinguishes a plain limit order by
   `MaxPriceLevels(1090)=1`, which this venue accepts and ignores, so it never
   refuses an order the real venue would take.
+
+**NSE** — the venue implements the Regular Lot book of the Normal market and
+the pre-open call auction, over the NNF Trimmed Protocol. Deliberately not
+built, and refused with a published error code rather than faked:
+
+- **every other book**: Special Terms, Stop Loss, Odd Lot, Spot, Auction and
+  Call Auction 2, each answered `ERR_INVALID_BOOK_TYPE (16422)`. An odd lot is
+  not promoted to a board lot, for the reason it is not at HKEX either.
+- **All Or None** (16319) and **minimum fill** (16320), **disclosed quantity**
+  (16400) and **Good Till Cancelled / Good Till Date** (16326). Disclosed
+  quantity in particular: the core has no replenishment concept, and accepting
+  the field while ignoring it would be the worst of both.
+- **the message download** (7000/7011/7021/7031), which is the only recovery
+  this protocol has — there is no resend. A `MESSAGE_RECORD` is 80 to 512
+  bytes, the actual message wrapped with its own inner header inside an outer
+  one, while every structure here is fixed width and the layout engine is built
+  on that being true. A `DOWNLOAD_REQUEST` is answered with `ERROR_RESPONSE_OUT`
+  and 16123 rather than an empty download, which would tell a client its orders
+  were gone. Cancel on Disconnect is therefore observable only through the
+  control plane and the audit, not through the client's own recovery.
+- **the broadcast market-data feed**, which is UDP multicast and LZO-compressed.
+  LZO cannot be written under the standard-library-only constraint. Market data
+  reaches a person through the control plane, the CLI and the board instead.
+- **trade modification and cancellation**, the freeze and approval flow, and
+  market-wide index circuit breakers.
+
+And three things that are built but not to the letter:
+
+- **the Gateway Router leg is not encrypted.** The specification requires TLS
+  1.3 on it; this simulator's reactor is a single-threaded `selectors` loop with
+  no TLS support, and giving it some means a non-blocking handshake state
+  machine inside the most load-bearing module in the tree — a change with its
+  own design, not a detail of adding a venue. So `gateway_router.tls` accepts
+  only `"none"` and **refuses** `"1.3"` rather than serving plain TCP under a
+  setting that claims otherwise. What is lost is confidentiality on the key
+  exchange; the message flow, the secrets and the AES-256-GCM on every gateway
+  message afterwards are exactly as published.
+- **the sign-on password is not verified.** A simulator holds no credential
+  store, so `SIGN_ON_REQUEST_IN` is accepted on a configured User ID whatever
+  password it carries — and the password is struck out of the audit either way.
+- **order numbers are sequential from 1** rather than in NSE's own encoding,
+  which the specification does not publish. They are unique, monotonic and fit
+  the `DOUBLE` the wire carries, which is everything a client can rely on.
+
+The rest is in `venues/nse/rules.py:ASSUMPTIONS`, reported by
+`exsim --port 9103 call venue.assumptions`. The two that would bite hardest
+against a real client are the layout of the dynamic half of the cryptographic
+IV, which the document gives as a C `long long` without saying how it is laid
+out once incremented, and the direction that counter walks — see the
+`NewCipher` docstring, which explains why the document's own wording cannot be
+read literally.
 
 The spread table and both price rules were checked against the published Rules
 of the Exchange rather than assumed; `exsim assumptions` lists what remains.
