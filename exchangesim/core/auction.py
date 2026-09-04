@@ -75,12 +75,35 @@ class AuctionResult(object):
             self.price, self.volume, self.reason)
 
 
-def uncross(book, reference_price=None):
+#: The tie-break rules a call auction may apply, in the order they are applied.
+#: Named so a venue can say which of them its own rules use, and so the reason
+#: an auction gives for its price is the rule that decided it.
+MAX_VOLUME = "maximum volume"
+LOWEST_IMBALANCE = "lowest imbalance"
+SURPLUS_DIRECTION = "surplus direction"
+CLOSEST_TO_REFERENCE = "closest to the reference price"
+HIGHER_PRICE = "higher price"
+
+#: The five-rule chain HKEX's Central Auction Session publishes, and the
+#: default -- so a venue that says nothing gets what it always got.
+STANDARD_RULES = (MAX_VOLUME, LOWEST_IMBALANCE, SURPLUS_DIRECTION,
+                  CLOSEST_TO_REFERENCE, HIGHER_PRICE)
+
+
+def uncross(book, reference_price=None, rules=STANDARD_RULES):
     """Find the auction price for ``book``. Executes nothing.
 
     Returns an :class:`AuctionResult`. ``price`` is None when no price can be
     established -- an empty side, or a book that does not cross -- in which case
     the caller decides what to do; HKEX falls back on the reference price.
+
+    ``rules`` says **which** tie-breaks apply and in what order, because that is
+    a property of the auction rather than of auctions in general. Maximising the
+    matchable quantity is universal; resolving a remaining tie in the direction
+    of the surplus is not. NSE's pre-open chain has no such rule -- maximum
+    quantity, then minimum unmatched, then closest to the previous close -- so
+    a chain that applied one would pick a different price from the exchange's,
+    silently and only sometimes.
     """
     bids, asks = book.bids, book.asks
     best_bid, best_ask = bids.best_price, asks.best_price
@@ -101,45 +124,16 @@ def uncross(book, reference_price=None):
     if not tradable:
         return AuctionResult(candidates=candidates, reason="nothing would trade")
 
-    # Rule 1: maximise the matchable quantity.
-    best_volume = max(row[1] for row in tradable)
-    survivors = [row for row in tradable if row[1] == best_volume]
-    reason = "maximum volume"
+    survivors, reason = tradable, ""
+    for rule in rules:
+        if len(survivors) <= 1:
+            break
+        survivors, applied = _apply(rule, survivors, reference_price)
+        reason = applied or reason
 
-    # Rule 2: of those, the lowest imbalance.
-    if len(survivors) > 1:
-        least = min(abs(row[2]) for row in survivors)
-        narrowed = [row for row in survivors if abs(row[2]) == least]
-        if len(narrowed) < len(survivors):
-            reason = "lowest imbalance"
-        survivors = narrowed
-
-    # Rule 3: of those, resolve in the direction of the surplus, but only when
-    # every remaining price agrees about which side that surplus is on.
-    if len(survivors) > 1:
-        signs = set(_sign(row[2]) for row in survivors)
-        if signs == set([1]):
-            survivors = [max(survivors, key=lambda row: row[0])]
-            reason = "buy surplus, highest price"
-        elif signs == set([-1]):
-            survivors = [min(survivors, key=lambda row: row[0])]
-            reason = "sell surplus, lowest price"
-
-    # Rule 4: of those, closest to the reference price.
-    if len(survivors) > 1 and reference_price is not None:
-        nearest = min(abs(row[0] - reference_price) for row in survivors)
-        narrowed = [row for row in survivors
-                    if abs(row[0] - reference_price) == nearest]
-        if len(narrowed) < len(survivors):
-            reason = "closest to the reference price"
-        survivors = narrowed
-
-    # Rule 5: of those, the higher -- which is also the fallback when there is
-    # no reference price to be close to.
-    if len(survivors) > 1:
-        survivors = [max(survivors, key=lambda row: row[0])]
-        reason = ("higher of two equidistant prices" if reference_price is not None
-                  else "highest price")
+    if not reason:
+        # Only one price ever qualified, so no tie-break was reached.
+        reason = MAX_VOLUME
 
     price, volume, imbalance = survivors[0]
     return AuctionResult(
@@ -147,6 +141,48 @@ def uncross(book, reference_price=None):
         surplus_side=(Side.BUY if imbalance > 0
                       else Side.SELL if imbalance < 0 else None),
         candidates=candidates, reason=reason)
+
+
+def _apply(rule, survivors, reference_price):
+    """One tie-break: the prices that survive it, and what to call it.
+
+    Returns the reason only when the rule actually narrowed the field, so the
+    result names the rule that decided the price rather than the last one tried.
+    """
+    if rule == MAX_VOLUME:
+        best = max(row[1] for row in survivors)
+        return [row for row in survivors if row[1] == best], MAX_VOLUME
+
+    if rule == LOWEST_IMBALANCE:
+        least = min(abs(row[2]) for row in survivors)
+        narrowed = [row for row in survivors if abs(row[2]) == least]
+        return narrowed, (LOWEST_IMBALANCE if len(narrowed) < len(survivors)
+                          else None)
+
+    if rule == SURPLUS_DIRECTION:
+        # Only when every remaining price agrees which side the surplus is on.
+        signs = set(_sign(row[2]) for row in survivors)
+        if signs == set([1]):
+            return [max(survivors, key=lambda row: row[0])],                 "buy surplus, highest price"
+        if signs == set([-1]):
+            return [min(survivors, key=lambda row: row[0])],                 "sell surplus, lowest price"
+        return survivors, None
+
+    if rule == CLOSEST_TO_REFERENCE:
+        if reference_price is None:
+            return survivors, None
+        nearest = min(abs(row[0] - reference_price) for row in survivors)
+        narrowed = [row for row in survivors
+                    if abs(row[0] - reference_price) == nearest]
+        return narrowed, (CLOSEST_TO_REFERENCE if len(narrowed) < len(survivors)
+                          else None)
+
+    if rule == HIGHER_PRICE:
+        return [max(survivors, key=lambda row: row[0])], (
+            "higher of two equidistant prices" if reference_price is not None
+            else "highest price")
+
+    raise ValueError("unknown auction tie-break rule %r" % rule)
 
 
 def _candidate_prices(book):

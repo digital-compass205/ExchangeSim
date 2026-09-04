@@ -656,7 +656,7 @@ class AuditedCommandsTest(unittest.TestCase):
     ))
 
     NSE_ONLY = frozenset((
-        "box.kill",
+        "box.kill", "preopen.lock",
     ))
 
     def audited(self, harness):

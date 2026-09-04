@@ -641,6 +641,15 @@ class NseApplication(Application):
             message.set(tag, "N")
         return message
 
+    def emit_auction(self, events):
+        """Report an auction's fills to whoever owns each order.
+
+        There is no sender to fall back on -- nobody's message caused this --
+        so an event whose order has no signed-on owner is simply not reported,
+        which is what a client that has gone away would get anyway.
+        """
+        self._emit(None, events)
+
     def broadcast_state(self, state):
         """Tell every signed-on user that the market moved."""
         message = self.system_information()

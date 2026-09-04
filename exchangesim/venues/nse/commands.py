@@ -9,9 +9,11 @@ Router has issued.
 
 from ...control.commands import (
     CommandError,
+    E_CONFLICT,
     E_NOT_FOUND,
     arg_int,
 )
+from ...core.enums import TradingState
 from .. import common_commands
 from . import rules
 from . import transactions as X
@@ -63,6 +65,35 @@ def register(registry, venue):
             "issued": [secrets.describe() for secrets in issued
                        if secrets is not None],
         }
+
+    @registry.add("preopen",
+                  "The pre-open session and what each security would trade at.",
+                  audit=False)
+    def _preopen(context, args):
+        """The indicative equilibrium price, security by security.
+
+        Computed on demand rather than remembered, because it changes with
+        every order until the book is locked -- which is the one thing somebody
+        watching a pre-open actually wants to see move.
+        """
+        return venue.preopen.describe()
+
+    @registry.add("preopen.lock",
+                  "End the pre-open order-entry period without uncrossing.")
+    def _preopen_lock(context, args):
+        """NSE's 'Preopen ended': the book freezes and the price is published.
+
+        Separate from uncrossing because the exchange separates them. Moving
+        the market to OPEN is what executes.
+        """
+        market = venue.markets[venue.market_name]
+        if market.state.market_state != TradingState.PRE_OPEN:
+            raise CommandError(
+                "market '%s' is %s, not PRE_OPEN"
+                % (venue.market_name, market.state.market_state), E_CONFLICT)
+        venue.preopen.lock()
+        venue.set_trading_state(TradingState.OPENING_AUCTION)
+        return venue.preopen.describe()
 
     @registry.add("transactions",
                   "The interactive transaction codes this venue serves.",

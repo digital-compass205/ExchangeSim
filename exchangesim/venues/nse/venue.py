@@ -45,6 +45,7 @@ from . import commands as venue_commands
 from . import dictionary as D
 from . import layouts as LY
 from . import rules
+from .auctions import PREOPEN_RULES, PreOpenSession
 from .gateway_router import GatewayRouter
 from .handlers import NseApplication
 
@@ -108,6 +109,7 @@ class NseVenue(Venue):
         self.acceptor = None
         self.router = None
         self.market_name = NORMAL_MARKET
+        self.preopen = None
         self._band_table = None
         self._tick_table = None
         self._bands = {}                # symbol -> its own band, in per cent
@@ -307,21 +309,44 @@ class NseVenue(Venue):
             publisher=self.publisher,
             tape_length=self.config.get("tape_length", 500),
             description=entry.get("description", "Normal Market"),
-            ack_on_entry=rules.ACK_BEFORE_EXECUTION)
+            ack_on_entry=rules.ACK_BEFORE_EXECUTION,
+            auction_rules=PREOPEN_RULES)
+        self.preopen = PreOpenSession(self)
 
         for symbol in self.instruments:
             self.markets[self.market_name].book(symbol)
         log.info("market '%s' created: state=%s", self.market_name, state)
 
     def set_trading_state(self, state, market=None, symbol=None):
-        """Move the market, then tell every signed-on user where it went."""
+        """Move the market, uncrossing the pre-open on the way out of it.
+
+        The uncrossing happens **before** the state change is applied, for the
+        reason CLAUDE.md gives: moving to a closed state expires resting orders,
+        and an auction run afterwards would find an empty book.
+        """
         target = self.markets.get(market or self.market_name)
         if target is None:
             raise KeyError(market)
+
+        events = []
+        if self._leaving_preopen(target, state, symbol):
+            _results, events = self.preopen.uncross()
+            self.application.emit_auction(events)
+
         changed = target.set_state(state, symbol=symbol)
+        if state == TradingState.PRE_OPEN and symbol is None:
+            self.preopen.open()
         if self.application is not None:
             self.application.broadcast_state(state)
         return changed
+
+    def _leaving_preopen(self, market, state, symbol):
+        """Whether this transition is the one that executes the auction."""
+        if symbol is not None or self.preopen is None:
+            return False
+        current = market.state.market_state
+        return (current in (TradingState.PRE_OPEN, TradingState.OPENING_AUCTION)
+                and state == TradingState.OPEN)
 
     # -- engine ------------------------------------------------------------
 
@@ -451,6 +476,7 @@ class NseVenue(Venue):
         summary.update({
             "market": self.market_name,
             "instruments": len(self.instruments),
+            "preopen_locked": bool(self.preopen and self.preopen.locked),
             "boxes": self.manager.describe_boxes() if self.manager else [],
             "gateway": list(self.acceptor.address[:2]) if self.acceptor else None,
             "gateway_router": (list(self.router.address[:2])

@@ -23,11 +23,18 @@ class Market(object):
 
     def __init__(self, name, codec, trade_ids, clock=None, stp_mode="NONE",
                  initial_state=TradingState.CLOSED, publisher=None,
-                 tape_length=None, description="", ack_on_entry=False):
+                 tape_length=None, description="", ack_on_entry=False,
+                 auction_rules=None):
         self.name = name
         self.codec = codec
         self.clock = clock
         self.description = description
+        #: Which tie-breaks this market's call auction applies, and in what
+        #: order. A property of the auction rather than of auctions in general:
+        #: HKEX resolves a remaining tie in the direction of the surplus and
+        #: NSE does not, so a shared chain would give one of them the other's
+        #: price. See :data:`exchangesim.core.auction.STANDARD_RULES`.
+        self.auction_rules = auction_rules or auction.STANDARD_RULES
         self.state = TradingStateMachine(name, initial_state)
         self.matching = MatchingEngine(codec, trade_ids, clock, stp_mode,
                                        ack_on_entry=ack_on_entry)
@@ -133,7 +140,7 @@ class Market(object):
         trading at any venue, so it is a core invariant and not a venue rule.
         """
         book = self.book(symbol)
-        result = auction.uncross(book, reference_price)
+        result = auction.uncross(book, reference_price, self.auction_rules)
         price = result.price if result.crossed else reference_price
 
         events = auction.execute(book, price, self.matching.trade_ids, self.clock)
