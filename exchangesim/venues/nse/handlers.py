@@ -317,6 +317,31 @@ class NseApplication(Application):
         session.send(self.system_information())
         return None
 
+    def _on_download_request(self, session, message):
+        """Refused, with the protocol's own way of saying so.
+
+        The message download is the only recovery NNF has -- there is no
+        resend -- and it is deliberately unbuilt, because a MESSAGE_RECORD is
+        80 to 512 bytes: the actual message wrapped, with its own inner header,
+        inside an outer one. Every structure in this venue is fixed width, and
+        the layout engine is built on that being true; a variable-length record
+        is a change to the engine rather than a table to transcribe.
+
+        So it is refused rather than answered with an empty download, which
+        would tell a client its orders were gone. ERROR_RESPONSE_OUT is the
+        protocol's own carrier for a refusal that fits no other message.
+        """
+        reply = Message.create(str(X.ERROR_RESPONSE_OUT))
+        reply.set(D.ERROR_CODE, "16123")            # CANT_COMPLETE_YOUR_REQUEST
+        reply.set(D.USER_ID, str(session.user_id))
+        reply.set(D.LOG_TIME, str(self._nse_seconds()))
+        reply.set(D.ERROR_MESSAGE,
+                  "message download is not implemented by this simulator")
+        session.send(reply)
+        log.info("user %s asked for a message download, which is unbuilt",
+                 session.target_comp_id)
+        return None
+
     # -- refusals ----------------------------------------------------------
 
     def _unsupported(self, message):
@@ -728,6 +753,7 @@ _HANDLERS = {
     X.ORDER_CANCEL_IN: NseApplication._on_cancel,
     X.SIGN_OFF_REQUEST_IN: NseApplication._on_sign_off,
     X.SYSTEM_INFORMATION_IN: NseApplication._on_system_information,
+    X.DOWNLOAD_REQUEST: NseApplication._on_download_request,
 }
 
 _RENDERERS = {

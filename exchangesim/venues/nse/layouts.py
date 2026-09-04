@@ -319,10 +319,12 @@ def build_cm():
                    _trade_fields())
 
     # -- recovery, Chapter 5 ---------------------------------------------
+    #
+    # The request is defined so it can be read and refused by name. The three
+    # response records are not, because they are not produced: a MESSAGE_RECORD
+    # is 80 to 512 bytes -- the actual message wrapped inside an outer header --
+    # and every structure here is fixed width. See handlers._on_download_request.
     layouts.define(X.DOWNLOAD_REQUEST, "MESSAGE_DOWNLOAD", 48, (
         L.Field(D.DOWNLOAD_SEQUENCE, "SequenceNumber", T.DOUBLE, 40),))
-    layouts.define(X.HEADER_RECORD, "HEADER_RECORD", 40, ())
-    layouts.define(X.MESSAGE_RECORD, "MESSAGE_RECORD", 40, ())
-    layouts.define(X.TRAILER_RECORD, "TRAILER_RECORD", 40, ())
 
     return layouts

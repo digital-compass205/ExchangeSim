@@ -60,10 +60,13 @@ PUBLISHED_SIZES = {
     X.BOX_SIGN_ON_REQUEST_IN: 60,
     X.BOX_SIGN_ON_REQUEST_OUT: 52,
     X.DOWNLOAD_REQUEST: 48,
-    X.HEADER_RECORD: 40,
-    X.MESSAGE_RECORD: 40,
-    X.TRAILER_RECORD: 40,
 }
+
+#: Defined in transactions.py so a log line can name them, but produced by
+#: nothing: the message download is deliberately unbuilt because a
+#: MESSAGE_RECORD is 80 to 512 bytes and every structure here is fixed width.
+#: See ``rules.NOT_IMPLEMENTED``.
+NOT_STRUCTURED = (X.HEADER_RECORD, X.MESSAGE_RECORD, X.TRAILER_RECORD)
 
 REFERENCE = "exchangesim/venues/nse/reference/%s.csv"
 
@@ -90,6 +93,10 @@ class StructureSizeTest(unittest.TestCase):
     def test_every_published_code_has_a_structure(self):
         self.assertEqual(sorted(PUBLISHED_SIZES),
                          sorted(int(l.msg_type) for l in self.layouts.layouts))
+
+    def test_the_download_response_records_have_none(self):
+        for code in NOT_STRUCTURED:
+            self.assertIsNone(self.layouts.layout(code), X.NAMES[code])
 
     def test_the_header_is_forty_bytes_with_the_long_long_at_fourteen(self):
         # pragma pack 2, and the single most quotable consequence of it.

@@ -586,11 +586,9 @@ def application_messages():
                  inbound=False),
 
         # -- recovery -------------------------------------------------------
+        # Defined so the request can be read and refused by name; the three
+        # response records are not produced. See rules.NOT_IMPLEMENTED.
         _message(X.DOWNLOAD_REQUEST, "DOWNLOAD_REQUEST", (DOWNLOAD_SEQUENCE,)),
-        _message(X.HEADER_RECORD, "HEADER_RECORD", (DOWNLOAD_COUNT,),
-                 inbound=False),
-        _message(X.MESSAGE_RECORD, "MESSAGE_RECORD", (), inbound=False),
-        _message(X.TRAILER_RECORD, "TRAILER_RECORD", (), inbound=False),
     ]
 
 

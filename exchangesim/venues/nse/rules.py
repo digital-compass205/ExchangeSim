@@ -337,6 +337,12 @@ NOT_IMPLEMENTED = [
     "The UDP multicast broadcast feed. It is LZO-compressed, and LZO cannot be "
     "written under this project's standard-library-only constraint. Market "
     "data is on the control plane, the CLI and the board instead.",
+    "The message download (7000/7011/7021/7031), which is the only recovery "
+    "this protocol has. A MESSAGE_RECORD is 80 to 512 bytes -- the actual "
+    "message wrapped, with its own inner header, inside an outer one -- and "
+    "every structure here is fixed width. A DOWNLOAD_REQUEST is answered with "
+    "ERROR_RESPONSE_OUT and error 16123 rather than an empty download, which "
+    "would tell a client its orders were gone.",
     "Market-wide index circuit breakers.",
 ]
 
