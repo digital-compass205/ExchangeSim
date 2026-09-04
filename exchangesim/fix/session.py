@@ -193,6 +193,16 @@ class Session(object):
         return "Session(%s->%s, %s)" % (
             self.sender_comp_id, self.target_comp_id, self.state)
 
+    def reset(self):
+        """Discard the sequence numbers and the stored messages.
+
+        A method rather than a reach into ``session.store`` from the control
+        plane, because not every protocol here *has* a store: NNF has no
+        sequence numbers and no resend, and its session raises instead. A no-op
+        store would report success for something that did not happen.
+        """
+        self.store.reset()
+
     def describe(self):
         return {
             "sender_comp_id": self.sender_comp_id,

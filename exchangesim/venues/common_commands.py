@@ -490,13 +490,18 @@ def register(registry, venue):
 
     @registry.add("session.reset",
                   "Reset a session's sequence numbers and stored messages.")
+    # Refused rather than faked at a venue whose protocol has no sequence
+    # numbers to reset -- see NnfSession.reset.
     def _session_reset(context, args):
         session = _require_session(venue, args)
         if session.connected:
             raise CommandError(
                 "session '%s' is connected; disconnect it first"
                 % session.target_comp_id)
-        session.store.reset()
+        try:
+            session.reset()
+        except NotImplementedError as exc:
+            raise CommandError(str(exc), E_CONFLICT)
         return session.describe()
 
     @registry.add("session.kill", "Disconnect a session's active connection.")

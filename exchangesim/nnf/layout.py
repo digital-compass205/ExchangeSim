@@ -216,12 +216,20 @@ class HeaderLayout(object):
     Options is free to differ again.
     """
 
-    __slots__ = ("size", "fields", "code_field")
+    __slots__ = ("size", "fields", "code_field", "length_tag")
+
+    #: The header field holding the length of the whole message. Found by name
+    #: rather than by tag, because the tag is the dialect's to choose and the
+    #: field is Chapter 2's -- "set to the length of the entire message,
+    #: including the length of message header". Filling it in the codec means
+    #: no handler can forget it.
+    LENGTH_FIELD_NAME = "MessageLength"
 
     def __init__(self, size, fields):
         self.size = size
         self.fields = tuple(fields)
         self.code_field = self._find_code_field()
+        self.length_tag = self._find_length_tag()
 
     def _find_code_field(self):
         for field in self.fields:
@@ -229,6 +237,12 @@ class HeaderLayout(object):
                 return field
         raise ValueError("a header must carry the transaction code (tag %d)"
                          % TRANSACTION_CODE)
+
+    def _find_length_tag(self):
+        for field in self.fields:
+            if field.name == self.LENGTH_FIELD_NAME:
+                return field.tag
+        return None
 
     def transaction_code(self, raw):
         """The transaction code of a message, before its layout is known."""
@@ -304,6 +318,10 @@ class Layout(object):
 
     def encode(self, message):
         buffer = bytearray(self.size)
+        if self.header.length_tag is not None:
+            # Always the structure's own size, and never a handler's business:
+            # a fixed-width message has exactly one possible length.
+            message.set(self.header.length_tag, str(self.size))
         for field in self.header.fields:
             field.encode(message, buffer)
         for field in self.fields:

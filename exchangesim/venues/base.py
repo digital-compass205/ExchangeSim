@@ -121,6 +121,11 @@ class Venue(object):
         codecs = self.codecs or {}
         if protocol and protocol in codecs:
             return codecs[protocol]
+        if len(codecs) == 1:
+            # A venue that speaks one protocol, whatever it is called. Falling
+            # straight through to "fix" would answer None at a venue that has
+            # no FIX encoding at all, and every audit entry would go unrendered.
+            return list(codecs.values())[0]
         return codecs.get("fix")
 
     def dictionary_for(self, protocol=None):
