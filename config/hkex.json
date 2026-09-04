@@ -82,7 +82,7 @@
 
   "counterparty": {
     "default": "8888",
-    "override": null
+    "override": "HKGCCP"
   },
 
   "tape_length": 500,
