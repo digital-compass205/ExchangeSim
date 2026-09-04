@@ -90,3 +90,54 @@ own precision.
 Still genuinely unbuilt, and rejected rather than faked: the odd/special lot
 book, quotes (`35=S/Z/AI`), trade capture (`35=AE/AR`), drop copy, and the
 Volatility Control Mechanism.
+
+## NSE India, Capital Market (in progress)
+
+Index: <https://www.nseindia.com/static/trade/platform-services-neat-trading-system-protocols>
+
+| File | Used for |
+|---|---|
+| `TP_CM_Trimmed_NNF_PROTOCOL_6.6_20260803151116.pdf` | everything: the transaction codes and structures in `venues/nse/`, the framing and crypto in `nnf/`; v6.6, Feb 2025 lineage |
+| NSE call-auction circulars (pre-open session) | the equilibrium-price rule chain in `venues/nse/rules.py:PREOPEN_RULES` — **not** in the protocol document |
+| NSE circulars on price bands / DPR | `venues/nse/reference/price_bands.csv` |
+
+The protocol document is unusually complete for a venue here: it tables every
+interactive transaction code with its structure and byte size, and it publishes
+the order-flag bitfield **twice**, once for little-endian and once for big-endian
+machines. Where HKEX left the bit numbering to be assumed, NSE states it, so
+`ASSUMPTIONS` should stay correspondingly short. What the document does *not*
+define is the trading rules — the pre-open uncrossing chain and the daily price
+range come from the circulars, as HKEX's auction rules came from the Rules of
+the Exchange.
+
+### What this protocol requires that neither other venue did
+
+| Requirement | Where it lives |
+|---|---|
+| **Not FIX in any encoding.** A proprietary fixed-width big-endian format with its own sign-on, no sequence numbers, no resend and no session-level Reject | a third protocol stack, `nnf/`, beside `fix/` and `binary/` |
+| **A 22-byte packet prefix** — `Length(2) + SequenceNumber(4) + MD5-or-GCM-tag(16)` — over the 40-byte `MESSAGE_HEADER`, capped at 1024 bytes, with the checksum covering the message data only (Chapter 10) | `nnf/packet.py` |
+| **Mandatory AES-256-GCM**, in two published methodologies: GCM-as-keystream with MD5 integrity, and full GCM with a 12-byte AAD and the tag in the packet prefix. The IV is static[8] + a 64-bit counter incremented before each encryption and *decremented* before each decryption | `nnf/crypto.py`, written by hand — the stdlib has MD5 and TLS but no AES |
+| **A TLS 1.3 Gateway Router** on its own port issuing the key, IV and AAD (`GR_REQUEST 2400` / `GR_RESPONSE 2401`) | a second listener in `venues/nse/venue.py` |
+| **A two-tier session**: one TCP connection is a *box* (`23008`/`23009` registration, `23000`/`23001` box sign-on) and every user linked to that Box ID signs on over it (`2300`/`2301`). Disconnecting the box logs off all its users | `nnf/session.py:BoxConnection` owning many `NnfSession` |
+| **`pragma pack 2`** — an 8-byte `LONGLONG` sits at offset 14 of the header, and structures of odd size are padded to even | `nnf/layout.py`, fixed offsets rather than computed ones |
+| **One structure, fourteen transaction codes.** `ORDER_ENTRY_REQUEST` (290 bytes) carries entry, modify, cancel, all three confirmations, both rejects, the error and the price confirmation | one `Layout`, many `MessageDef`s |
+| **No client order identifier.** Modify and cancel address the exchange-assigned `OrderNumber` (DOUBLE); `NNFField` is a member reference for the CTCL audit trail, not a handle | `CancelRequest.order_id` in the core, resolved via `OrderRegistry.by_order_id` with an ownership check |
+| **Order characteristics as a bitfield**, not scalar fields: `ST_ORDER_FLAGS` holds ATO, Mkt, OnStop, Day, GTC, IOC, AON, MF and the state bits | `nnf/layout.py:Flags`, one tag per bit |
+| Prices in **paise**, times in **seconds since 1 Jan 1980**, strings **blank**-padded and never NUL-terminated | `core/prices.py:PriceCodec(2)`; `nnf/types.py` |
+| Instruments named by **Symbol + Series** (`SEC_INFO`: `CHAR[10]` + `CHAR[2]`) — the numeric token appears only in the security master and the broadcasts | `NseVenue.resolve_symbol`, keyed on `"INFY-EQ"` |
+| **Rejections are numeric `ErrorCode` in the header**, on a transaction-specific `*_ERROR`/`*_REJECT`, because there is no session-level Reject | `venues/nse/rules.py:REJECT_TO_ERROR_CODE`; the session hands a dialect failure to the gateway |
+
+Market and book vocabulary, from the appendix:
+
+| | |
+|---|---|
+| Market types | 1 Normal, 2 Odd Lot, 3 Spot, 4 Auction, 5 Call auction 1, 6 Call auction 2 |
+| Market statuses | 0 PreOpen (Normal only), 1 Open, 2 Closed, 3 Preopen ended |
+| Book types | 1 Regular Lot, 2 Special Terms, 3 Stop Loss, 5 Odd Lot, 6 Spot, 7 Auction, 11 Call Auction 1 |
+
+Only the Regular Lot book of the Normal market is implemented, plus its pre-open
+call auction. Every other book type is **rejected** rather than promoted to a
+Regular Lot order, on the same reasoning as HKEX's odd lots. Also deliberately
+unbuilt: the UDP multicast broadcast feed (it is LZO-compressed, and LZO cannot
+be done under the stdlib-only constraint), the closing call auction, trade
+modification and cancellation, disclosed quantity, and the freeze/approval flow.
