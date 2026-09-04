@@ -33,6 +33,13 @@
       "host": "127.0.0.1",
       "port": 9102,
       "token": null
+    },
+    {
+      "key": "nse",
+      "label": "NSE",
+      "host": "127.0.0.1",
+      "port": 9103,
+      "token": null
     }
   ],
 

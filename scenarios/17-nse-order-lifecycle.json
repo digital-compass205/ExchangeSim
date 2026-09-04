@@ -1,0 +1,63 @@
+{
+  "name": "NSE: box registration, sign-on, and the order lifecycle over NNF",
+  "protocol": "nnf",
+  "fix_port": 9021,
+  "control_port": 9103,
+  "server_comp_id": "NSE-SIM",
+
+  "sessions": {
+    "dealer": {"comp_id": "40521", "protocol": "nnf"}
+  },
+
+  "steps": [
+    {"comment": "NNF field maps are private tag numbers, which is less readable than a FIX scenario and deliberate: a scenario states what goes on the wire, and a friendlier vocabulary would hide exactly the details these tests exist to pin. Every step says what it is doing instead. 35=transaction code, 9003=UserId, 9004=ErrorCode, 9170=BoxId, 9120=BrokerId, 9140=sign-on UserId, 55/9100=Symbol/Series, 9110=BookType, 54=BuySell, 38=Volume, 44=Price, 37=OrderNumber, 151=LeavesQty, 14=CumQty, 9204=Day flag, 9123=Pro/Client, 1=ClientAccount."},
+
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "OPEN"}},
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+
+    {"comment": "There is no one-message logon here. A connection is a box: it registers, the box signs on, and only then may a user sign on over it."},
+    {"send": "dealer", "fields": {"35": "23008", "9004": "0", "9170": "1"}},
+    {"comment": "The registration response is the bare 40-byte header: it carries no Box ID, because the structure has no room for one.", "expect": "dealer", "fields": {"35": "23009", "9004": "0"}},
+
+    {"send": "dealer", "fields": {"35": "23000", "9004": "0", "9170": "1", "9120": "10123"}},
+    {"expect": "dealer", "fields": {"35": "23001", "9004": "0", "9170": "1"}},
+
+    {"comment": "SIGN_ON_REQUEST_IN. The password is not verified -- a simulator holds no credential store -- but it is struck out of the audit."},
+    {"send": "dealer", "fields": {"35": "2300", "9004": "0", "9003": "40521", "9140": "40521", "9141": "Nse@2026", "9120": "10123"}},
+    {"expect": "dealer", "fields": {"35": "2301", "9004": "0", "9140": "40521", "9120": "10123"}},
+
+    {"comment": "Sign-on is answered with the market's state, so a client never has to guess whether the venue is open."},
+    {"expect": "dealer", "fields": {"35": "1601", "9160": "1"}},
+
+    {"comment": "A fresh Regular Lot buy. NSE has no ClOrdID: the confirmation is where the client learns the OrderNumber, and it is the only handle it gets."},
+    {"send": "dealer", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "INFY", "9100": "EQ", "9110": "1", "54": "1", "38": "100", "44": "1520.00", "9123": "1", "1": "CLIENT001", "9120": "10123", "9204": "Y"}},
+    {"expect": "dealer", "fields": {"35": "2073", "9004": "0", "55": "INFY", "9100": "EQ", "54": "1", "38": "100", "151": "100", "14": "0", "44": "1520.00"}, "capture": {"order": "37"}},
+
+    {"control": "bbo", "args": {"market": "NORMAL", "symbol": "INFY-EQ"},
+     "expect_result": {"bid": "1520.00", "bid_qty": 100, "ask": null}},
+
+    {"comment": "Amend it. The request names the exchange's own order number, because there is nothing else to name it by."},
+    {"send": "dealer", "fields": {"35": "2040", "9004": "0", "9003": "40521", "37": "$order", "55": "INFY", "9100": "EQ", "9110": "1", "38": "60", "44": "1521.00", "9204": "Y"}},
+    {"expect": "dealer", "fields": {"35": "2074", "9004": "0", "37": "$order", "38": "60", "44": "1521.00", "9211": "Y"}},
+
+    {"control": "bbo", "args": {"market": "NORMAL", "symbol": "INFY-EQ"},
+     "expect_result": {"bid": "1521.00", "bid_qty": 60}},
+
+    {"comment": "Cancel it, by the same number."},
+    {"send": "dealer", "fields": {"35": "2070", "9004": "0", "9003": "40521", "37": "$order", "55": "INFY", "9100": "EQ", "9110": "1"}},
+    {"expect": "dealer", "fields": {"35": "2075", "9004": "0", "37": "$order", "9104": "T"}},
+
+    {"control": "bbo", "args": {"market": "NORMAL", "symbol": "INFY-EQ"},
+     "expect_result": {"bid": null, "ask": null}},
+
+    {"comment": "Cancelling it again is refused: NNF answers with the erroring form of the same transaction, carrying a numeric code, because it has no session-level Reject at all. 16013 is ERR_INVALID_ORDER_NUMBER."},
+    {"send": "dealer", "fields": {"35": "2070", "9004": "0", "9003": "40521", "37": "$order", "55": "INFY", "9100": "EQ", "9110": "1"}},
+    {"expect": "dealer", "fields": {"35": "2072", "9004": "16013"}},
+
+    {"send": "dealer", "fields": {"35": "2320", "9004": "0", "9003": "40521"}},
+    {"expect": "dealer", "fields": {"35": "2321", "9004": "0"}},
+
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "CLOSED"}}
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "name": "NSE: two members trading, and everything this venue refuses",
+  "protocol": "nnf",
+  "fix_port": 9021,
+  "control_port": 9103,
+  "server_comp_id": "NSE-SIM",
+
+  "sessions": {
+    "one": {"comp_id": "40521", "protocol": "nnf"},
+    "two": {"comp_id": "40777", "protocol": "nnf"}
+  },
+
+  "steps": [
+    {"comment": "Two members on two boxes. A report routes to the owner of the order it concerns, which here means it crosses to a different connection entirely."},
+
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "OPEN"}},
+    {"comment": "Scenarios share one process, so the tape carries whatever an earlier run left. Clearing it is what makes a trade count here mean this run's trades."},
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+    {"control": "stats.reset", "args": {"market": "NORMAL", "symbol": "WIPRO-EQ"}},
+
+    {"comment": "Box 1, broker 10123, user 40521."},
+    {"send": "one", "fields": {"35": "23008", "9004": "0", "9170": "1"}},
+    {"expect": "one", "fields": {"35": "23009", "9004": "0"}},
+    {"send": "one", "fields": {"35": "23000", "9004": "0", "9170": "1", "9120": "10123"}},
+    {"expect": "one", "fields": {"35": "23001", "9004": "0"}},
+    {"send": "one", "fields": {"35": "2300", "9004": "0", "9003": "40521", "9140": "40521", "9141": "Nse@2026", "9120": "10123"}},
+    {"expect": "one", "fields": {"35": "2301", "9004": "0"}},
+
+    {"comment": "Box 2, broker 10456, user 40777."},
+    {"send": "two", "fields": {"35": "23008", "9004": "0", "9170": "2"}},
+    {"expect": "two", "fields": {"35": "23009", "9004": "0"}},
+    {"send": "two", "fields": {"35": "23000", "9004": "0", "9170": "2", "9120": "10456"}},
+    {"expect": "two", "fields": {"35": "23001", "9004": "0"}},
+    {"send": "two", "fields": {"35": "2300", "9004": "0", "9003": "40777", "9140": "40777", "9141": "Nse@2026", "9120": "10456"}},
+    {"expect": "two", "fields": {"35": "2301", "9004": "0"}},
+
+    {"clear": "one"},
+    {"clear": "two"},
+
+    {"comment": "Member one bids for 200 of WIPRO-EQ at 289.55."},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "WIPRO", "9100": "EQ", "9110": "1", "54": "1", "38": "200", "44": "289.55", "9123": "1", "1": "CLIENT001", "9120": "10123", "9204": "Y"}},
+    {"expect": "one", "fields": {"35": "2073", "9004": "0", "55": "WIPRO", "151": "200"}},
+
+    {"comment": "Member two sells 80 into it. Both sides get a trade confirmation, each with its own running totals, and the resting side's arrives on the other box."},
+    {"send": "two", "fields": {"35": "2000", "9004": "0", "9003": "40777", "55": "WIPRO", "9100": "EQ", "9110": "1", "54": "2", "38": "80", "44": "289.55", "9123": "1", "1": "CLIENT777", "9120": "10456", "9204": "Y"}},
+    {"expect": "two", "fields": {"35": "2073", "9004": "0", "151": "80"}},
+    {"expect": "two", "fields": {"35": "2222", "32": "80", "31": "289.55", "9133": "0", "14": "80"}},
+    {"expect": "one", "fields": {"35": "2222", "32": "80", "31": "289.55", "9133": "120", "14": "80"}},
+
+    {"control": "bbo", "args": {"market": "NORMAL", "symbol": "WIPRO-EQ"},
+     "expect_result": {"bid": "289.55", "bid_qty": 120, "ask": null}},
+
+    {"comment": "Execution is at the resting price, not the incoming one."},
+    {"send": "two", "fields": {"35": "2000", "9004": "0", "9003": "40777", "55": "WIPRO", "9100": "EQ", "9110": "1", "54": "2", "38": "20", "44": "280.00", "9123": "1", "1": "CLIENT777", "9120": "10456", "9204": "Y"}},
+    {"expect": "two", "fields": {"35": "2222", "32": "20", "31": "289.55"}},
+
+    {"comment": "An IOC is a bit of ST_ORDER_FLAGS (9206), not a TimeInForce field. It is acknowledged, sweeps what it can, and its balance is cancelled with ERR_FOK_ORDER_CANCELLED."},
+    {"clear": "two"},
+    {"send": "two", "fields": {"35": "2000", "9004": "0", "9003": "40777", "55": "WIPRO", "9100": "EQ", "9110": "1", "54": "2", "38": "500", "44": "289.55", "9123": "1", "1": "CLIENT777", "9120": "10456", "9206": "Y"}},
+    {"expect": "two", "fields": {"35": "2073", "9004": "0", "151": "500", "9206": "Y"}},
+    {"expect": "two", "fields": {"35": "2222", "32": "100"}},
+    {"expect": "two", "fields": {"35": "2075", "9105": "16388"}},
+
+    {"comment": "Every book but Regular Lot is refused rather than promoted. 16422 is ERR_INVALID_BOOK_TYPE; the book here is 5, Odd Lot."},
+    {"clear": "one"},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "WIPRO", "9100": "EQ", "9110": "5", "54": "1", "38": "1", "44": "289.55", "9123": "1", "9120": "10123", "9204": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9004": "16422"}},
+
+    {"comment": "All Or None: 16319, ERR_NO_AON_IN_SECURITY."},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "WIPRO", "9100": "EQ", "9110": "1", "54": "1", "38": "100", "44": "289.55", "9123": "1", "9120": "10123", "9204": "Y", "9207": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9004": "16319"}},
+
+    {"comment": "A price outside the security's circuit filter: 16284. WIPRO carries a 20 per cent band around 289.55."},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "WIPRO", "9100": "EQ", "9110": "1", "54": "1", "38": "100", "44": "999.00", "9123": "1", "9120": "10123", "9204": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9004": "16284"}},
+
+    {"comment": "An off-tick price: the tick is five paise everywhere. 16283."},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "WIPRO", "9100": "EQ", "9110": "1", "54": "1", "38": "100", "44": "289.57", "9123": "1", "9120": "10123", "9204": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9004": "16283"}},
+
+    {"comment": "An unknown security: 16012."},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "NOSUCH", "9100": "EQ", "9110": "1", "54": "1", "38": "100", "44": "100.00", "9123": "1", "9120": "10123", "9204": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9004": "16012"}},
+
+    {"comment": "The message download is the only recovery this protocol has, and it is deliberately unbuilt. It is refused with ERROR_RESPONSE_OUT and 16123 rather than answered with an empty download, which would say the orders were gone."},
+    {"send": "one", "fields": {"35": "7000", "9004": "0", "9003": "40521", "9300": "0"}},
+    {"expect": "one", "fields": {"35": "2302", "9004": "16123"}},
+
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "CLOSED"}}
+  ]
+}

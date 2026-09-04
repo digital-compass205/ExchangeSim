@@ -1,0 +1,85 @@
+{
+  "name": "NSE: the pre-open call auction, from order entry to the uncrossing",
+  "protocol": "nnf",
+  "fix_port": 9021,
+  "control_port": 9103,
+  "server_comp_id": "NSE-SIM",
+
+  "sessions": {
+    "one": {"comp_id": "40521", "protocol": "nnf"},
+    "two": {"comp_id": "40777", "protocol": "nnf"}
+  },
+
+  "steps": [
+    {"comment": "Three phases, all command-driven: PRE_OPEN accepts orders without matching, preopen.lock freezes the book at a published price, and OPEN executes. A pre-open that closed on a timer would make this scenario's outcome depend on the clock."},
+
+    {"comment": "Scenarios share one process, so the tape carries whatever an earlier run left. Clearing it is what makes a trade count here mean this run's trades."},
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+    {"control": "stats.reset", "args": {"market": "NORMAL", "symbol": "ITC-EQ"}},
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "PRE_OPEN"}},
+
+    {"send": "one", "fields": {"35": "23008", "9004": "0", "9170": "1"}},
+    {"expect": "one", "fields": {"35": "23009", "9004": "0"}},
+    {"send": "one", "fields": {"35": "23000", "9004": "0", "9170": "1", "9120": "10123"}},
+    {"expect": "one", "fields": {"35": "23001", "9004": "0"}},
+    {"send": "one", "fields": {"35": "2300", "9004": "0", "9003": "40521", "9140": "40521", "9141": "Nse@2026", "9120": "10123"}},
+    {"expect": "one", "fields": {"35": "2301", "9004": "0"}},
+
+    {"send": "two", "fields": {"35": "23008", "9004": "0", "9170": "2"}},
+    {"expect": "two", "fields": {"35": "23009", "9004": "0"}},
+    {"send": "two", "fields": {"35": "23000", "9004": "0", "9170": "2", "9120": "10456"}},
+    {"expect": "two", "fields": {"35": "23001", "9004": "0"}},
+    {"send": "two", "fields": {"35": "2300", "9004": "0", "9003": "40777", "9140": "40777", "9141": "Nse@2026", "9120": "10456"}},
+    {"expect": "two", "fields": {"35": "2301", "9004": "0"}},
+
+    {"comment": "A client signing on in the pre-open is told so: SYSTEM_INFORMATION_OUT with the Normal market at status 0, PreOpen."},
+    {"expect": "two", "fields": {"35": "1601", "9160": "0"}},
+
+    {"clear": "one"},
+    {"clear": "two"},
+
+    {"comment": "ITC-EQ, previous close 436.90. A bid at 437.00 and a smaller offer at 436.00: they cross, and in continuous trading would already have traded."},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "ITC", "9100": "EQ", "9110": "1", "54": "1", "38": "300", "44": "437.00", "9123": "1", "1": "CLIENT001", "9120": "10123", "9204": "Y", "9213": "Y"}},
+    {"expect": "one", "fields": {"35": "2073", "9004": "0", "55": "ITC", "151": "300"}},
+
+    {"send": "two", "fields": {"35": "2000", "9004": "0", "9003": "40777", "55": "ITC", "9100": "EQ", "9110": "1", "54": "2", "38": "200", "44": "436.00", "9123": "1", "1": "CLIENT777", "9120": "10456", "9204": "Y", "9213": "Y"}},
+    {"expect": "two", "fields": {"35": "2073", "9004": "0", "151": "200"}},
+
+    {"control": "trades", "args": {"market": "NORMAL", "symbol": "ITC-EQ"},
+     "expect_result": {"trades": []}},
+
+    {"comment": "The indicative equilibrium price, and the rule that decided it. NSE's chain has no surplus-direction rule, which HKEX applies unconditionally."},
+    {"control": "preopen", "args": {},
+     "expect_result": {"locked": false, "state": "PRE_OPEN"}},
+
+    {"comment": "An at-the-opening order has no price at all. It stays off the quote, because the ladder is a statement about limit prices."},
+    {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "ITC", "9100": "EQ", "9110": "1", "54": "1", "38": "50", "9123": "1", "1": "CLIENT001", "9120": "10123", "9201": "Y", "9213": "Y"}},
+    {"expect": "one", "fields": {"35": "2073", "9004": "0", "9201": "Y"}},
+
+    {"comment": "Lock the book. NSE calls this 'Preopen ended' and reports it as market status 3; nothing executes yet."},
+    {"control": "preopen.lock", "args": {},
+     "expect_result": {"locked": true, "state": "OPENING_AUCTION"}},
+    {"expect": "one", "fields": {"35": "1601", "9160": "3"}},
+    {"control": "trades", "args": {"market": "NORMAL", "symbol": "ITC-EQ"},
+     "expect_result": {"trades": []}},
+
+    {"clear": "one"},
+    {"clear": "two"},
+
+    {"comment": "Opening executes everything at one price -- 437.00, the only price at which the maximum quantity trades. The 200 on offer goes to the at-the-opening order first, as a priceless order does in any call auction, and the remaining 150 to the limit bid."},
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "OPEN"}},
+    {"expect": "one", "fields": {"35": "2222", "55": "ITC", "31": "437.00", "32": "50", "9201": "Y"}},
+    {"expect": "one", "fields": {"35": "2222", "55": "ITC", "31": "437.00", "32": "150", "9133": "150"}},
+
+    {"comment": "The selling member gets one confirmation per counterparty, each with its own running totals -- 50 done with 150 left, then 200 done with none."},
+    {"expect": "two", "fields": {"35": "2222", "55": "ITC", "31": "437.00", "32": "50", "9133": "150", "14": "50"}},
+    {"expect": "two", "fields": {"35": "2222", "55": "ITC", "31": "437.00", "32": "150", "9133": "0", "14": "200"}},
+
+    {"comment": "What did not trade rests into continuous trading: 150 of the original 300 bid."},
+    {"control": "bbo", "args": {"market": "NORMAL", "symbol": "ITC-EQ"},
+     "expect_result": {"bid": "437.00", "bid_qty": 150, "ask": null}},
+
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "CLOSED"}}
+  ]
+}

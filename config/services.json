@@ -18,6 +18,10 @@
       "config": "config/hkex.json"
     },
     {
+      "name": "nse",
+      "config": "config/nse.json"
+    },
+    {
       "name": "web",
       "kind": "web",
       "config": "config/web.json"

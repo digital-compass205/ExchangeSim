@@ -42,6 +42,9 @@ ORDER_ENTRY_COMMANDS = frozenset(("order.new",))
 MARKET_CONTROL_COMMANDS = frozenset((
     "state.set", "state.clear", "stp.set",
     "auction.lock", "auction.reference",
+    # NSE's pre-open is locked the same way HKEX's auction is: it ends order
+    # entry for everyone on the market, so it is a market power, not a trade.
+    "preopen.lock",
 ))
 
 #: Commands that read the message audit. Gated on their own, and not by

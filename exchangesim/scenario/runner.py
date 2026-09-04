@@ -77,10 +77,11 @@ class StepFailure(Exception):
 
 
 def _client_codec(protocol, begin_string, server_comp_id):
-    """The client half of one of a venue's encodings.
+    """The client half of one of a venue's wire formats.
 
-    The binary encoding is HKEX's, and its layouts live with that venue, so the
-    import is deferred: a run that scripts nothing but FIX never touches it.
+    Every import but the FIX one is deferred, because each pulls in a venue's
+    own layouts: a run that scripts nothing but FIX should not need HKEX's
+    binary tables or NSE's structures to be importable.
     """
     if protocol == "fix":
         return FixCodec(begin_string)
@@ -90,6 +91,10 @@ def _client_codec(protocol, begin_string, server_comp_id):
         from ..venues.hkex import dictionary as hkex_dictionary
         return BinaryCodec(layouts.build(hkex_dictionary.build_binary()),
                            server_comp_id, client=True)
+    if protocol == "nnf":
+        from ..nnf.codec import NnfCodec
+        from ..venues.nse import layouts as nse_layouts
+        return NnfCodec(nse_layouts.build_cm(), client=True)
     raise ScenarioError("unknown protocol '%s'" % protocol)
 
 
@@ -157,20 +162,14 @@ class Session(object):
         for tag, value in sorted(fields.items(), key=lambda item: int(item[0])):
             message.set(int(tag), str(value))
 
-        message.set(C.MSG_SEQ_NUM, self.seq)
-        self.seq += 1
-        message.set(C.SENDER_COMP_ID, self.comp_id)
-        message.set(C.TARGET_COMP_ID, self.server_comp_id)
-        message.set(C.SENDING_TIME, self.clock.timestamp())
-
+        # What a header needs before a message goes out is the wire format's
+        # business, not this runner's: FIX wants a sequence number, a CompID
+        # pair and a SendingTime; NNF wants none of them.
         target_sub = sub_id if sub_id is not None else self.sub_id
-        if target_sub and not message.has(C.TARGET_SUB_ID):
-            message.set(C.TARGET_SUB_ID, target_sub)
-
-        # Application messages need a TransactTime; filling it in keeps
-        # scenario files free of timestamps that would go stale.
-        if message.msg_type in ("D", "F", "G", "q") and not message.has(60):
-            message.set(60, self.clock.timestamp())
+        self.codec.prepare(message, self.comp_id, self.server_comp_id,
+                           self.seq, self.clock,
+                           target_sub if target_sub else None)
+        self.seq += 1
 
         self.sock.sendall(self.codec.encode(message))
         return message
@@ -178,9 +177,12 @@ class Session(object):
     def logon(self, reset=True, heartbeat=30):
         if reset:
             self.seq = 1
-        fields = {str(C.MSG_TYPE): C.LOGON,
-                  str(C.ENCRYPT_METHOD): "0",
-                  str(C.HEART_BT_INT): str(heartbeat)}
+        fields = self.codec.logon_defaults(heartbeat)
+        if fields is None:
+            raise ScenarioError(
+                "session '%s' speaks %s, which has no one-message logon; "
+                "script the sequence with 'send' steps instead"
+                % (self.name, self.protocol))
         if reset and self.logon_reset_flag:
             fields[str(C.RESET_SEQ_NUM_FLAG)] = C.YES
         fields.update(self.logon_fields)
@@ -278,9 +280,12 @@ class Runner(object):
         self.server_comp_id = server_comp_id
         self.token = token
         self.verbose = verbose
+        #: Values one step captured for a later one, cleared per scenario.
+        self._captured = {}
 
     def run(self, scenario):
         """Run one scenario, returning (passed, message)."""
+        self._captured = {}
         sessions = self._build_sessions(scenario)
         # A scenario may name its own ports so that one invocation can drive
         # every venue a CI run has started, not only the default one.
@@ -432,7 +437,7 @@ class Runner(object):
         fields = step.get("fields")
         if not isinstance(fields, dict):
             raise ScenarioError("a 'send' step needs a 'fields' object")
-        message = session.send(fields, step.get("sub_id"))
+        message = session.send(self._resolve(fields), step.get("sub_id"))
         self._log("%s --> %s" % (session.name, message.to_string()))
 
     def _step_expect(self, step, sessions, control):
@@ -441,14 +446,53 @@ class Runner(object):
         if not isinstance(fields, dict):
             raise ScenarioError("an 'expect' step needs a 'fields' object")
 
-        found = session.wait_for(fields,
+        wanted = self._resolve(fields)
+        found = session.wait_for(wanted,
                                  step.get("timeout", DEFAULT_EXPECT_TIMEOUT))
         if found is None:
             raise StepFailure(
                 "no message matching %s arrived for '%s'; received: %s"
-                % (json.dumps(fields), session.name,
+                % (json.dumps(wanted), session.name,
                    _summarise(session.buffered())))
         self._log("%s <-- %s" % (session.name, found.to_string()))
+        self._capture(step, found)
+
+    # -- captured values ---------------------------------------------------
+    #
+    # Some identifiers a scenario needs are the *venue's* to choose. NSE
+    # assigns the order number and gives the client no handle of its own, so a
+    # scenario cannot hard-code the number it will cancel by -- and scenarios
+    # share one process, so it is not even the same number twice. An `expect`
+    # step names what to remember; a later `send` refers to it with `$name`.
+
+    def _capture(self, step, message):
+        captured = step.get("capture")
+        if not captured:
+            return
+        if not isinstance(captured, dict):
+            raise ScenarioError("'capture' must be an object of name -> tag")
+        for name, tag in captured.items():
+            value = message.get(int(tag))
+            if value is None:
+                raise StepFailure(
+                    "cannot capture '%s': the message has no tag %s"
+                    % (name, tag))
+            self._captured[name] = value
+            self._log("       captured %s = %s" % (name, value))
+
+    def _resolve(self, fields):
+        """Substitute every ``$name`` with what an earlier step captured."""
+        resolved = {}
+        for tag, value in fields.items():
+            text = value
+            if isinstance(text, str) and text.startswith("$"):
+                name = text[1:]
+                if name not in self._captured:
+                    raise ScenarioError(
+                        "nothing has captured '%s' yet" % name)
+                text = self._captured[name]
+            resolved[tag] = text
+        return resolved
 
     def _step_expect_none(self, step, sessions, control):
         session = self._session(step, sessions, "expect_none")
@@ -476,6 +520,9 @@ class Runner(object):
             session.pump()
         session.clear()
 
+    def _step_comment(self, step, sessions, control):
+        """A note in the scenario file. Does nothing, deliberately."""
+
     def _step_sleep(self, step, sessions, control):
         time.sleep(float(step["sleep"]))
 
@@ -494,6 +541,10 @@ _STEPS = [
     ("expect_none", Runner._step_expect_none),
     ("clear", Runner._step_clear),
     ("sleep", Runner._step_sleep),
+    # Last, so a step that carries a comment *and* an action still performs the
+    # action. On its own it is a note -- a preamble, or a paragraph explaining
+    # what the next few steps are for.
+    ("comment", Runner._step_comment),
 ]
 
 

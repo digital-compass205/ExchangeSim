@@ -118,6 +118,29 @@ class NnfCodec(object):
         """Nothing here is gap-fillable: NNF has no resend."""
         return False
 
+    # -- the client half of the seam ---------------------------------------
+
+    def prepare(self, message, sender, target, seq, clock, sub_id=None):
+        """Stamp the packet sequence number, and nothing else.
+
+        There is no CompID pair, no SendingTime and no SubID in this protocol.
+        What the message header does need -- the User ID, the transaction code,
+        the error code -- a scenario writes itself, because those are fields of
+        the structure rather than framing.
+        """
+        message.set(C.MSG_SEQ_NUM, seq)
+        return message
+
+    def logon_defaults(self, heartbeat=30):
+        """There is no one-message logon here.
+
+        A box registers, signs on, and only then does a user sign on: three
+        messages with three different structures. A scenario scripts them, and
+        returning None makes the runner say so rather than sending something
+        that could not work.
+        """
+        return None
+
     # -- rendering ---------------------------------------------------------
 
     def raw_string(self, raw, dictionary=None, delimiter=None):

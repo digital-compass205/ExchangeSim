@@ -111,6 +111,27 @@ class BinaryCodec(object):
             return False
         return header.msg_type in GAP_FILLABLE
 
+    # -- the client half of the seam ---------------------------------------
+
+    def prepare(self, message, sender, target, seq, clock, sub_id=None):
+        """The same header a tag=value client would fill in.
+
+        This encoding carries no SendingTime and no SubID, but writing them on
+        the message costs nothing -- ``encode`` reads only what the layout
+        names -- and keeps one implementation of "what a scripted client
+        stamps" for both encodings of one protocol.
+        """
+        message.set(C.MSG_SEQ_NUM, seq)
+        message.set(C.SENDER_COMP_ID, sender)
+        message.set(C.TARGET_COMP_ID, target)
+        if message.msg_type in ("D", "F", "G", "q") and not message.has(60):
+            message.set(60, clock.timestamp())
+        return message
+
+    def logon_defaults(self, heartbeat=30):
+        """Logon here has neither EncryptMethod nor HeartBtInt (section 7.6)."""
+        return {str(C.MSG_TYPE): C.LOGON}
+
     # -- rendering ---------------------------------------------------------
 
     def raw_string(self, raw, dictionary=None, delimiter=None):

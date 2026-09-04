@@ -24,6 +24,8 @@ DEFAULT_RUN_DIR = "var/run"
 PORT_KEYS = (
     ("fix", "fix.port"),
     ("binary", "binary.port"),
+    ("nnf", "nnf.port"),
+    ("router", "gateway_router.port"),
     ("control", "control.port"),
     ("http", "http.port"),
 )

@@ -11,7 +11,7 @@ SCENARIOS ?= scenarios/*.json
 
 # What `make smoke` needs up: the venues the scenarios name, but not the web
 # board, which is a client of them and takes no part.
-SMOKE_SERVICES ?= japannext hkex
+SMOKE_SERVICES ?= japannext hkex nse
 
 CTL = $(PYTHON) -m exchangesim.ctl.main --config $(SERVICES)
 

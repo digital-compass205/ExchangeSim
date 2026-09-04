@@ -359,5 +359,27 @@ class MainExitCodeTest(unittest.TestCase):
         self.assertEqual(3, main([path, "--control-port", "1"]))
 
 
+class ThirdProtocolTest(unittest.TestCase):
+    """A scenario can script NSE's wire as well as the other two."""
+
+    def test_the_runner_knows_the_nnf_client_codec(self):
+        from exchangesim.scenario.runner import _client_codec
+        codec = _client_codec("nnf", "NNF.CM", "NSE-SIM")
+        self.assertEqual(codec.name, "nnf")
+        self.assertTrue(codec.client)
+
+    def test_nnf_has_no_one_message_logon(self):
+        # A box registers, signs on, and only then does a user sign on. The
+        # `logon` verb would send something that could not work, so the codec
+        # says so and the runner turns that into a scenario error.
+        from exchangesim.scenario.runner import _client_codec
+        self.assertIsNone(_client_codec("nnf", "NNF.CM", "X").logon_defaults())
+
+    def test_a_fix_logon_is_unchanged(self):
+        from exchangesim.fix.codec import FixCodec
+        self.assertEqual(FixCodec().logon_defaults(30),
+                         {"35": "A", "98": "0", "108": "30"})
+
+
 if __name__ == "__main__":
     unittest.main()

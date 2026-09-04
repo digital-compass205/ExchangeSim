@@ -166,9 +166,9 @@ class ServiceSetTest(unittest.TestCase):
 class ShippedConfigTest(unittest.TestCase):
     """The file that ships must declare the venues the docs promise."""
 
-    def test_services_json_declares_both_venues_and_the_board(self):
+    def test_services_json_declares_every_venue_and_the_board(self):
         services = ServiceSet.load(default_config_path())
-        self.assertEqual(["japannext", "hkex", "web"], services.names)
+        self.assertEqual(["japannext", "hkex", "nse", "web"], services.names)
 
     def test_the_board_starts_last(self):
         # It is a client of the venues: last up, first down.
@@ -187,6 +187,7 @@ class ShippedConfigTest(unittest.TestCase):
         self.assertEqual(9102, services["hkex"]["control"])
         # The binary encoding is the one HKEX clients arrive on.
         self.assertEqual(9011, services["hkex"]["binary"])
+        self.assertEqual(9103, services["nse"]["control"])
         self.assertEqual(9200, services["web"]["http"])
 
 

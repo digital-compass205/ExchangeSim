@@ -45,5 +45,33 @@ class FixCodec(object):
     def raw_string(self, raw, dictionary, delimiter="|"):
         return render.raw_string(raw, dictionary, delimiter)
 
+    # -- the client half of the seam ---------------------------------------
+    #
+    # A scripted client has to fill in whatever its protocol's header needs
+    # before a message goes out, and what that is differs completely: FIX wants
+    # a sequence number, a CompID pair and a SendingTime, NNF wants none of
+    # them. These two put that knowledge behind the same line as the rest of
+    # the wire format, so `scenario/runner.py` branches on nothing.
+
+    def prepare(self, message, sender, target, seq, clock, sub_id=None):
+        """Stamp the header fields a scripted client would not write itself."""
+        message.set(C.MSG_SEQ_NUM, seq)
+        message.set(C.SENDER_COMP_ID, sender)
+        message.set(C.TARGET_COMP_ID, target)
+        message.set(C.SENDING_TIME, clock.timestamp())
+        if sub_id and not message.has(C.TARGET_SUB_ID):
+            message.set(C.TARGET_SUB_ID, sub_id)
+        # Application messages need a TransactTime; filling it in keeps
+        # scenario files free of timestamps that would go stale.
+        if message.msg_type in ("D", "F", "G", "q") and not message.has(60):
+            message.set(60, clock.timestamp())
+        return message
+
+    def logon_defaults(self, heartbeat=30):
+        """The fields a Logon carries before a scenario adds its own."""
+        return {str(C.MSG_TYPE): C.LOGON,
+                str(C.ENCRYPT_METHOD): "0",
+                str(C.HEART_BT_INT): str(heartbeat)}
+
     def __repr__(self):
         return "FixCodec(%s)" % self.begin_string
