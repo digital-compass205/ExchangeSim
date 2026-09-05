@@ -750,6 +750,24 @@ Concurrency is a single-threaded `selectors` reactor rather than `asyncio`,
 chosen for deterministic I/O ordering — reproducible matching in CI — and
 because it can be stepped synchronously from a test.
 
+TLS rides that reactor through a seam rather than inside it: a connection runs
+its bytes through a duck-typed transport whose default is the identity, so the
+plain path is unchanged and `core/reactor.py` imports no `ssl`. The
+implementation in `tls/` terminates TLS on a pair of `ssl.MemoryBIO`s instead of
+an `SSLSocket`, because an `SSLSocket` buffers decrypted plaintext where
+`select()` cannot see it — a reactor can then be told "not readable" while a
+whole message sits undelivered. `tls/` also issues its own certificates, in
+pure Python, for the same reason `nnf/crypto.py` writes its own AES: the
+standard library ships `ssl` but nothing that can write an X.509 certificate,
+and this project takes no dependencies. The DER is write-only; `tls/certs.py`
+decides when to reissue from metadata it keeps beside the PEMs.
+
+Because the deployment target's OpenSSL cannot always be assumed, development
+uses **two** interpreters: `venv36` is the target and `venv314` exists only so
+the TLS 1.3 path is exercised somewhere. Nothing requires 3.14 at run time, and
+a test that cannot run on one of them skips with a reason naming the OpenSSL
+version rather than passing silently.
+
 ## Sources
 
 Every venue behaviour is transcribed from that exchange's public specification.
@@ -883,15 +901,17 @@ built, and refused with a published error code rather than faked:
 
 And three things that are built but not to the letter:
 
-- **the Gateway Router leg is not encrypted.** The specification requires TLS
-  1.3 on it; this simulator's reactor is a single-threaded `selectors` loop with
-  no TLS support, and giving it some means a non-blocking handshake state
-  machine inside the most load-bearing module in the tree — a change with its
-  own design, not a detail of adding a venue. So `gateway_router.tls` accepts
-  only `"none"` and **refuses** `"1.3"` rather than serving plain TCP under a
-  setting that claims otherwise. What is lost is confidentiality on the key
-  exchange; the message flow, the secrets and the AES-256-GCM on every gateway
-  message afterwards are exactly as published.
+- **the Gateway Router's certificate is the simulator's own.** The leg *is* TLS
+  now, defaulting to 1.3 as the specification requires, and the published
+  methodology is a self-signed CA the exchange issues and distributes — so a
+  self-signed CA is the right shape. What cannot be reproduced is the
+  exchange's actual CA, so a member must point its client at the generated
+  `var/tls/gr_ca_cert1.pem` rather than the file it was given by NSE. Note that
+  the venue **refuses to start** where `gateway_router.tls` asks for 1.3 and the
+  interpreter's OpenSSL cannot do it (RHEL 8 can; a Windows build against
+  OpenSSL 1.0.2 cannot), rather than quietly serving something weaker. `"1.2"`
+  is a development value and a *floor*: a real client pins minimum and maximum
+  both to 1.3 and will not connect to a 1.2-only server.
 - **the sign-on password is not verified.** A simulator holds no credential
   store, so `SIGN_ON_REQUEST_IN` is accepted on a configured User ID whatever
   password it carries — and the password is struck out of the audit either way.

@@ -304,10 +304,13 @@ Trade and not Make Markets, since quoting is not implemented. A session with no
 invented broker.
 
 **NSE** is the NNF Trimmed Protocol, and connecting is a three-step sequence
-rather than a Logon. Optionally dial the **Gateway Router on 9022** first and
+rather than a Logon. Optionally dial the **Gateway Router on 9022** first —
+over **TLS**, verifying against `var/tls/gr_ca_cert1.pem`, which the simulator
+generates on first start under the name the specification gives it — and
 send `GR_REQUEST (2400)` naming your Box ID; the response carries the gateway
 address, a session key, a 256-bit cryptographic key, a 128-bit IV and a 96-bit
-additional key. Then open the gateway connection on **9021** and send, in order:
+additional key. Then open the gateway connection on **9021**, which is plain
+TCP with AES-256-GCM above it, and send, in order:
 `SECURE_BOX_REGISTRATION_REQUEST (23008)` — the last message in clear —
 `BOX_SIGN_ON_REQUEST (23000)`, and then `SIGN_ON_REQUEST (2300)` for each user.
 A connection is a *box*, so several users share one, and dropping it signs off
@@ -318,6 +321,15 @@ methodologies `gateway_router.encryption` names. Set
 `nnf.require_encryption: false` (the default) to skip the router entirely while
 you are bringing a client up: the box then runs in clear, which the protocol
 also defines.
+
+`gateway_router.tls` takes `"1.3"` (the default, and what the specification
+asks for), `"1.2"` or `"none"`. Asking for 1.3 on an interpreter whose OpenSSL
+cannot do it is **refused at start-up** rather than quietly downgraded, so
+development on Windows against OpenSSL 1.0.2 needs `"1.2"` — which is a
+minimum, not a ceiling, and which no real client will use, since NSE's own
+sample code pins both the minimum and the maximum to 1.3. The generated key in
+`var/tls/` is a **simulator** key: it exists so a client can complete a
+handshake, and it should never be promoted anywhere.
 
 A security is `Symbol` **and** `Series` — `INFY` + `EQ` — because neither names
 one alone, and everything the venue says back uses both. There is **no client
