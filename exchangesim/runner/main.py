@@ -124,6 +124,14 @@ def main(argv=None):
 
     try:
         runtime.start()
+    except ConfigError as exc:
+        # `--check` returns before `venue.setup()`, so a setting only the venue
+        # can validate -- reference data, a port, a TLS version the interpreter
+        # cannot serve -- first fails here. It is still a configuration error
+        # and deserves the same one-line answer, not a traceback.
+        sys.stderr.write("exsimd: %s\n" % exc)
+        runtime.stop()
+        return EXIT_CONFIG
     except OSError as exc:
         log.error("failed to start: %s", exc)
         runtime.stop()

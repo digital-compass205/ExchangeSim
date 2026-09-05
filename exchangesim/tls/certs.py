@@ -183,10 +183,10 @@ class CertificateStore(object):
     """
 
     def __init__(self, directory, common_name="localhost",
-                 organisation="ExchangeSim", names=(), ca_days=1095,
-                 leaf_days=365, renew_within_days=30, now=None,
-                 key_bits=_KEY_BITS, key_source=None):
-        # type: (str, str, str, tuple, int, int, int, callable, int, callable) -> None
+                 organisation="ExchangeSim", names=(), ca_common_name=None,
+                 ca_days=1095, leaf_days=365, renew_within_days=30,
+                 now=None, key_bits=_KEY_BITS, key_source=None):
+        # type: (str, str, str, tuple, str, int, int, int, callable, int, callable) -> None
         """``now``, when given, is a zero-argument callable returning the
         current UTC time -- injectable so a test can drive expiry and
         renewal without touching the real clock. Defaults to a naive-UTC
@@ -206,6 +206,12 @@ class CertificateStore(object):
         self.directory = directory
         self.common_name = common_name
         self.organisation = organisation
+        #: The CA's own Common Name, deliberately *not* the leaf's. A CA whose
+        #: subject equals its issuee's makes the leaf look self-issued: the
+        #: chain still verifies, but path building has nothing but the key
+        #: identifiers to tell the two apart, and stricter clients treat a
+        #: repeated subject in a chain as a loop.
+        self.ca_common_name = ca_common_name or ("%s Root CA" % organisation)
         self.names = tuple(names) if names else (common_name,)
         self.ca_days = ca_days
         self.leaf_days = leaf_days
@@ -274,12 +280,14 @@ class CertificateStore(object):
             names = tuple(meta["names"])
             common_name = meta["common_name"]
             organisation = meta["organisation"]
+            ca_common_name = meta["ca_common_name"]
         except (KeyError, TypeError, ValueError):
             return True
         if not_after <= now + datetime.timedelta(days=self.renew_within_days):
             return True
         if (names != self.names or common_name != self.common_name
-                or organisation != self.organisation):
+                or organisation != self.organisation
+                or ca_common_name != self.ca_common_name):
             return True
         return False
 
@@ -324,10 +332,10 @@ class CertificateStore(object):
         server_key = self._key_source()
 
         ca_cert_der = x509.self_signed_ca(
-            ca_key, self.common_name, self.organisation,
+            ca_key, self.ca_common_name, self.organisation,
             days=self.ca_days, now=now)
 
-        ca_subject = x509.subject_name(self.common_name, self.organisation)
+        ca_subject = x509.subject_name(self.ca_common_name, self.organisation)
         ca_key_id = x509.key_identifier(ca_key)
         not_after = now + datetime.timedelta(days=self.leaf_days)
         server_cert_der = x509.sign_leaf(
@@ -353,6 +361,7 @@ class CertificateStore(object):
             "names": list(self.names),
             "common_name": self.common_name,
             "organisation": self.organisation,
+            "ca_common_name": self.ca_common_name,
         }
         _write_atomic(self._meta_path,
                       json.dumps(meta, indent=2).encode("ascii"))

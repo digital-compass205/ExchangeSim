@@ -54,8 +54,8 @@ def describe_unavailable(policy, setting_name="tls"):
     """
     return (
         "%s '1.3' needs an interpreter linked against OpenSSL 1.1.1 or later; "
-        "this one has OpenSSL %s. Set it to '1.2' for local development, or "
-        "'none' for plain TCP." % (setting_name, _openssl_short_version())
+        "this one has %s. Set it to '1.2' for local development, or 'none' "
+        "for plain TCP." % (setting_name, _openssl_short_version())
     )
 
 
