@@ -1,0 +1,92 @@
+{
+  "name": "NSE F&O: a future and an option, and everything this venue refuses",
+  "protocol": "nnf",
+  "dialect": "nsefo",
+  "fix_port": 9031,
+  "control_port": 9104,
+  "server_comp_id": "NSEFO-SIM",
+
+  "sessions": {
+    "one": {"comp_id": "50521", "protocol": "nnf"},
+    "two": {"comp_id": "50777", "protocol": "nnf"}
+  },
+
+  "steps": [
+    {"comment": "F&O is a separate trading system from Capital Market -- its own gateway on 9031, its own boxes and its own users -- so nothing here touches the cash venue on 9021. Tags are F&O's own numbering, which is deliberately not Capital Market's: 9402=UserId, 9403=ErrorCode, 9650=BoxId, 9459=BrokerId, 9530/9531=sign-on user and password, 55/9410/9411/9412/9413=the five CONTRACT_DESC fields, 9449=BookType, 54=BuySell, 38=Volume, 44=Price, 37=OrderNumber, 9462=Pro/Client, 9624=Day, 9627=AON, 9622=StopLoss."},
+
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "OPEN"}},
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+    {"control": "stats.reset", "args": {"market": "NORMAL", "symbol": "NIFTY-FUTIDX-24SEP2026"}},
+
+    {"comment": "Box 101, broker 10123, user 50521. Registration, box sign-on, then the user over it -- the same three-step sequence Capital Market has, because the box/user session model is the protocol's, not the segment's."},
+    {"send": "one", "fields": {"35": "23008", "9403": "0", "9650": "101"}},
+    {"expect": "one", "fields": {"35": "23009", "9403": "0"}},
+    {"send": "one", "fields": {"35": "23000", "9403": "0", "9650": "101", "9459": "10123"}},
+    {"expect": "one", "fields": {"35": "23001", "9403": "0"}},
+    {"send": "one", "fields": {"35": "2300", "9403": "0", "9402": "50521", "9530": "50521", "9531": "Nse@2026", "9459": "10123"}},
+    {"expect": "one", "fields": {"35": "2301", "9403": "0"}},
+
+    {"comment": "Box 102, broker 10456, user 50777."},
+    {"send": "two", "fields": {"35": "23008", "9403": "0", "9650": "102"}},
+    {"expect": "two", "fields": {"35": "23009", "9403": "0"}},
+    {"send": "two", "fields": {"35": "23000", "9403": "0", "9650": "102", "9459": "10456"}},
+    {"expect": "two", "fields": {"35": "23001", "9403": "0"}},
+    {"send": "two", "fields": {"35": "2300", "9403": "0", "9402": "50777", "9530": "50777", "9531": "Nse@2026", "9459": "10456"}},
+    {"expect": "two", "fields": {"35": "2301", "9403": "0"}},
+
+    {"clear": "one"},
+    {"clear": "two"},
+
+    {"comment": "A NIFTY future. The expiry travels as seconds from 1 Jan 1980, and a future's StrikePrice is -1 rather than 0 -- the protocol breaking its own 'zero means absent' rule, which is why it is asserted here. The lot is 25, so the quantity is a multiple of it."},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "50", "44": "25400.00", "9462": "1", "1": "CLIENT001", "9459": "10123", "9624": "Y"}},
+    {"expect": "one", "fields": {"35": "2073", "9403": "0", "55": "NIFTY", "9410": "FUTIDX", "9412": "-1", "38": "50", "151": "50", "14": "0", "44": "25400.00"}, "capture": {"future": "37"}},
+
+    {"control": "bbo", "args": {"market": "NORMAL", "symbol": "NIFTY-FUTIDX-24SEP2026"},
+     "expect_result": {"bid": "25400.00", "bid_qty": 50, "ask": null}},
+
+    {"comment": "The other member sells 25 into it. Both sides get a trade confirmation with their own running totals, and the resting side's arrives on the other box."},
+    {"send": "two", "fields": {"35": "2000", "9403": "0", "9402": "50777", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "2", "38": "25", "44": "25400.00", "9462": "1", "1": "CLIENT777", "9459": "10456", "9624": "Y"}},
+    {"expect": "two", "fields": {"35": "2222", "32": "25", "31": "25400.00", "14": "25"}},
+    {"expect": "one", "fields": {"35": "2222", "32": "25", "31": "25400.00", "151": "25", "14": "25"}},
+
+    {"comment": "Amend the remainder by the exchange's own order number -- there is no client order ID in this protocol either."},
+    {"send": "one", "fields": {"35": "2040", "9403": "0", "9402": "50521", "37": "$future", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "50", "44": "25350.00", "9462": "1", "9459": "10123", "9624": "Y"}},
+    {"expect": "one", "fields": {"35": "2074", "9403": "0", "37": "$future", "44": "25350.00"}},
+
+    {"send": "one", "fields": {"35": "2070", "9403": "0", "9402": "50521", "37": "$future", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "50", "44": "25350.00", "9459": "10123"}},
+    {"expect": "one", "fields": {"35": "2075", "9403": "0", "37": "$future"}},
+
+    {"comment": "An option on the same underlying: the strike is real and the option type is CE, where the future carried -1 and XX."},
+    {"clear": "one"},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NIFTY", "9410": "OPTIDX", "9411": "1474675200", "9412": "25000.00", "9413": "CE", "9449": "1", "54": "1", "38": "25", "44": "420.50", "9462": "1", "1": "CLIENT001", "9459": "10123", "9624": "Y"}},
+    {"expect": "one", "fields": {"35": "2073", "9403": "0", "9410": "OPTIDX", "9413": "CE", "151": "25"}},
+
+    {"comment": "Book 3 is Stop Loss and Market-If-Touched together -- a conflation Capital Market does not have -- and neither is built, so the book itself is refused with e$invalid_book_type."},
+    {"clear": "one"},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "3", "54": "1", "38": "25", "44": "25400.00", "9462": "1", "9459": "10123", "9624": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9403": "16406"}},
+
+    {"comment": "The SL bit on a Regular Lot order names the order type rather than the book, so it gets its own code, SL_NOT_ALLOWED."},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "25", "44": "25400.00", "9462": "1", "9459": "10123", "9622": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9403": "16445"}},
+
+    {"comment": "All Or None: 16319."},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "25", "44": "25400.00", "9462": "1", "9459": "10123", "9624": "Y", "9627": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9403": "16319"}},
+
+    {"comment": "A quantity that is not a multiple of the contract's lot -- 20 against NIFTY's 25. Lot size is per contract here, not per venue."},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "20", "44": "25400.00", "9462": "1", "9459": "10123", "9624": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9403": "16328"}},
+
+    {"comment": "Outside the contract's own circuit filter: 16284."},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NIFTY", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "25", "44": "99999.00", "9462": "1", "9459": "10123", "9624": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9403": "16284"}},
+
+    {"comment": "A contract that is not listed: 16012."},
+    {"send": "one", "fields": {"35": "2000", "9403": "0", "9402": "50521", "55": "NOSUCH", "9410": "FUTIDX", "9411": "1474675200", "9412": "-1", "9413": "XX", "9449": "1", "54": "1", "38": "25", "44": "100.00", "9462": "1", "9459": "10123", "9624": "Y"}},
+    {"expect": "one", "fields": {"35": "2231", "9403": "16012"}},
+
+    {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
+    {"control": "state.set", "args": {"market": "NORMAL", "state": "CLOSED"}}
+  ]
+}

@@ -22,6 +22,10 @@
       "config": "config/nse.json"
     },
     {
+      "name": "nsefo",
+      "config": "config/nsefo.json"
+    },
+    {
       "name": "web",
       "kind": "web",
       "config": "config/web.json"

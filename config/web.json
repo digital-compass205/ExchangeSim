@@ -36,9 +36,16 @@
     },
     {
       "key": "nse",
-      "label": "NSE",
+      "label": "NSE Cash",
       "host": "127.0.0.1",
       "port": 9103,
+      "token": null
+    },
+    {
+      "key": "nsefo",
+      "label": "NSE F&O",
+      "host": "127.0.0.1",
+      "port": 9104,
       "token": null
     }
   ],

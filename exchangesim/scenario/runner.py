@@ -95,7 +95,18 @@ class StepFailure(Exception):
     """A step did not do what the scenario said it should."""
 
 
-def _client_codec(protocol, begin_string, server_comp_id):
+#: Which layout set an ``nnf`` session speaks, by ``dialect`` name. NNF is one
+#: protocol carrying two segments whose structures differ *under the same
+#: transaction codes* -- BOARD_LOT_IN is 290 bytes of Capital Market and 316 of
+#: Futures & Options, and SIGN_ON_REQUEST 276 against 278 -- so a scenario has
+#: to say which one it is scripting. Encoding an F&O order with Capital
+#: Market's tables produces a well-formed packet of the wrong length and the
+#: wrong tags, which is why this is named rather than guessed.
+NNF_DIALECTS = ("nse", "nsefo")
+DEFAULT_NNF_DIALECT = "nse"
+
+
+def _client_codec(protocol, begin_string, server_comp_id, dialect=None):
     """The client half of one of a venue's wire formats.
 
     Every import but the FIX one is deferred, because each pulls in a venue's
@@ -112,8 +123,16 @@ def _client_codec(protocol, begin_string, server_comp_id):
                            server_comp_id, client=True)
     if protocol == "nnf":
         from ..nnf.codec import NnfCodec
-        from ..venues.nse import layouts as nse_layouts
-        return NnfCodec(nse_layouts.build_cm(), client=True)
+        dialect = dialect or DEFAULT_NNF_DIALECT
+        if dialect == "nse":
+            from ..venues.nse import layouts as nse_layouts
+            return NnfCodec(nse_layouts.build_cm(), client=True)
+        if dialect == "nsefo":
+            from ..venues.nsefo import layouts as fo_layouts
+            return NnfCodec(fo_layouts.build_fo(), client=True)
+        raise ScenarioError(
+            "unknown nnf dialect '%s'; expected one of %s"
+            % (dialect, ", ".join(NNF_DIALECTS)))
     raise ScenarioError("unknown protocol '%s'" % protocol)
 
 
@@ -157,7 +176,8 @@ class Session(object):
 
     def __init__(self, name, comp_id, host, port, server_comp_id, sub_id=None,
                  timeout=5.0, begin_string="FIX.4.2", logon_fields=None,
-                 logon_reset_flag=True, protocol="fix", tls=None):
+                 logon_reset_flag=True, protocol="fix", tls=None,
+                 dialect=None):
         self.name = name
         self.comp_id = comp_id
         self.server_comp_id = server_comp_id
@@ -177,7 +197,10 @@ class Session(object):
         self.logon_reset_flag = logon_reset_flag
         #: Which encoding of the venue's protocol this session speaks.
         self.protocol = protocol
-        self.codec = _client_codec(protocol, begin_string, server_comp_id)
+        #: For NNF, which segment's structures -- see NNF_DIALECTS.
+        self.dialect = dialect
+        self.codec = _client_codec(protocol, begin_string, server_comp_id,
+                                   dialect)
         self.clock = RealClock()
         self.sock = None
         self.seq = 1
@@ -431,6 +454,7 @@ class Runner(object):
                 logon_fields=spec.get("logon_fields", data.get("logon_fields")),
                 logon_reset_flag=data.get("logon_reset_flag", True),
                 protocol=spec.get("protocol", data.get("protocol", "fix")),
+                dialect=spec.get("dialect", data.get("dialect")),
                 tls=tls)
         return sessions
 

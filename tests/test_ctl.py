@@ -168,7 +168,8 @@ class ShippedConfigTest(unittest.TestCase):
 
     def test_services_json_declares_every_venue_and_the_board(self):
         services = ServiceSet.load(default_config_path())
-        self.assertEqual(["japannext", "hkex", "nse", "web"], services.names)
+        self.assertEqual(["japannext", "hkex", "nse", "nsefo", "web"],
+                         services.names)
 
     def test_the_board_starts_last(self):
         # It is a client of the venues: last up, first down.
@@ -188,6 +189,11 @@ class ShippedConfigTest(unittest.TestCase):
         # The binary encoding is the one HKEX clients arrive on.
         self.assertEqual(9011, services["hkex"]["binary"])
         self.assertEqual(9103, services["nse"]["control"])
+        # The two NSE segments are separate trading systems with separate
+        # gateways, so every port is its own.
+        self.assertEqual(9104, services["nsefo"]["control"])
+        self.assertEqual(9031, services["nsefo"]["nnf"])
+        self.assertNotEqual(services["nse"]["nnf"], services["nsefo"]["nnf"])
         self.assertEqual(9200, services["web"]["http"])
 
 
