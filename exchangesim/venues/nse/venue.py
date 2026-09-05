@@ -39,6 +39,7 @@ from ...core.validation import StandardValidator
 from ...nnf import crypto
 from ...nnf.codec import NnfCodec
 from ...nnf.session import NnfSessionConfig, NnfSessionManager
+from ...tls import certs
 from ...wire.acceptor import Acceptor
 from ..base import Venue
 from . import commands as venue_commands
@@ -46,7 +47,7 @@ from . import dictionary as D
 from . import layouts as LY
 from . import rules
 from .auctions import PREOPEN_RULES, PreOpenSession
-from .gateway_router import GatewayRouter
+from .gateway_router import SUPPORTED_TLS, GatewayRouter
 from .handlers import NseApplication
 
 log = logging.getLogger(__name__)
@@ -83,6 +84,41 @@ class OrderNumberGenerator(object):
         return self._counter.__reduce__()[1][0]
 
 
+class _ExplicitCertificate(object):
+    """An operator-supplied Gateway Router certificate, reported without the
+    metadata a generated one carries.
+
+    ``certs`` is a DER *writer* with no matching reader (see its module
+    docstring): deriving an expiry or a fingerprint from a certificate this
+    project did not just generate would need a parser nothing here has ever
+    needed before. So an externally issued certificate reports only the CA
+    path a member was told to trust -- true for the generated case too, and
+    the one thing ``describe()``'s caller actually needs.
+    """
+
+    __slots__ = ("ca_certificate",)
+
+    def __init__(self, ca_certificate):
+        self.ca_certificate = ca_certificate
+
+    def describe(self):
+        return {"ca_certificate": self.ca_certificate, "certificate": None,
+                "fingerprint": None, "not_after": None, "names": []}
+
+
+def _dedupe(items):
+    """``items`` with duplicates dropped, keeping the first occurrence's
+    position -- order matters here because the first name in a certificate's
+    SAN list is conventionally the one a log or an error names."""
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
 class NseVenue(Venue):
     """NSE India Capital Market over the NNF Trimmed Protocol."""
 
@@ -108,6 +144,13 @@ class NseVenue(Venue):
         self.manager = None
         self.acceptor = None
         self.router = None
+        #: Either a ``certs.CertificateStore`` or an ``_ExplicitCertificate``,
+        #: set by ``_build_listeners`` -- ``None`` when the router is disabled
+        #: or its TLS policy is ``"none"``. ``commands.py`` reports through
+        #: its ``describe()``, never through the router's own attributes,
+        #: because it holds the one copy of this whether the certificate was
+        #: generated or supplied.
+        self.tls_certificate = None
         self.market_name = NORMAL_MARKET
         self.preopen = None
         self._band_table = None
@@ -434,9 +477,46 @@ class NseVenue(Venue):
 
         router = self.config.section("gateway_router")
         if router.get("enabled", True):
-            self.router = GatewayRouter(self, router)
-            self.router.start(router.get("host", host),
-                              router.get("port", port + 1))
+            router_host = router.get("host", host)
+            certfile, keyfile, ca_certificate = self._build_tls(
+                router, router_host)
+            self.router = GatewayRouter(self, router, certfile=certfile,
+                                        keyfile=keyfile,
+                                        ca_certificate=ca_certificate)
+            self.router.start(router_host, router.get("port", port + 1))
+
+    def _build_tls(self, router, host):
+        """Certificate material for the Gateway Router.
+
+        Returns ``(certfile, keyfile, ca_certificate)``, all ``None`` when the
+        configured policy is ``"none"`` -- a plain-TCP router must not pay
+        RSA keygen on every ``ctl start`` -- or when the policy is not one
+        ``GatewayRouter`` recognises at all, which is left for its own
+        constructor to refuse with a proper ``ConfigError`` naming the
+        accepted values.
+        """
+        policy = str(router.get("tls", "1.3")).lower()
+        if policy not in SUPPORTED_TLS or policy == "none":
+            self.tls_certificate = None
+            return None, None, None
+
+        explicit_cert = router.get("tls_cert")
+        explicit_key = router.get("tls_key")
+        if explicit_cert and explicit_key:
+            certfile = router.resolve_path("tls_cert")
+            keyfile = router.resolve_path("tls_key")
+            ca_certificate = router.resolve_path("tls_ca_cert")
+            self.tls_certificate = _ExplicitCertificate(ca_certificate)
+            return certfile, keyfile, ca_certificate
+
+        names = router.get("tls_names") or _dedupe(
+            [host, "localhost", "127.0.0.1"])
+        tls_dir = router.resolve_path("tls_dir", "../var/tls")
+        store = certs.CertificateStore(tls_dir, common_name=host,
+                                       names=names)
+        issued = store.ensure()
+        self.tls_certificate = store
+        return issued.certificate, issued.key, issued.ca_certificate
 
     # -- encryption --------------------------------------------------------
 

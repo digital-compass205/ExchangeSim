@@ -13,17 +13,28 @@ collect fresh secrets -- "in the event of a box disconnection, the IVs are reset
 at exchange end, and a new static and dynamic IV is provided in GR response
 message to a fresh GR query".
 
-**This leg is not encrypted, and the specification requires TLS 1.3 on it.**
-The reason is worth stating rather than burying: this project's reactor is a
-single-threaded ``selectors`` loop with no TLS support, and giving it some means
-a non-blocking handshake state machine inside the most load-bearing module in
-the tree. That is a change with its own design, not a detail of adding a venue,
-so ``gateway_router.tls`` refuses anything but ``"none"`` today rather than
-quietly serving plain TCP under a setting that claims otherwise. It is recorded
-in ``rules.ASSUMPTIONS`` and in ``docs/specs/README.md``.
+**This leg is TLS, per the specification (p.156).** The exchange issues its own
+self-signed CA, common to every member, and distributes it over the extranet as
+``gr_ca_cert1.pem``; a member's client verifies the router's server certificate
+against that one file. There are no client certificates -- the document
+describes server-side TLS only, which authenticates the router to the member,
+not the other way around. ``certs.CertificateStore`` generates that CA and a
+leaf under it on first use (see its module docstring); ``venue.py`` is what
+builds one, or takes an operator-supplied certificate instead, and hands this
+router the resulting paths. ``gateway_router.tls`` then picks the version by
+way of ``tls.context.server_context`` -- ``"1.3"`` by default, ``"1.2"`` as a
+development floor, or ``"none"`` for plain TCP.
 
-What a client loses by that is confidentiality on the key exchange. What it
-keeps is the whole message flow -- the same transaction codes, the same
+**The one thing that will bite an operator:** a real NSE client sets both
+``SSL_CTX_set_min_proto_version`` and ``set_max_proto_version`` to
+``TLS1_3_VERSION``, so it offers only TLS 1.3 and will not negotiate down. A
+router configured for ``"1.2"`` will therefore never see a connection from a
+real client -- that setting exists for a box whose interpreter cannot do 1.3 at
+all (this project's own Windows development box, on OpenSSL 1.0.2), not as a
+gentler production choice.
+
+What a client loses under ``"none"`` is confidentiality on the key exchange.
+What it keeps is the whole message flow -- the same transaction codes, the same
 structures, the same secrets, and the same AES-256-GCM on every gateway message
 afterwards.
 """
@@ -35,14 +46,16 @@ from ...core.config import ConfigError
 from ...fix.message import MalformedMessage, Message
 from ...nnf import crypto
 from ...nnf.codec import NnfCodec
+from ...tls import certs, context
 from . import dictionary as D
 from . import transactions as X
 
 log = logging.getLogger(__name__)
 
-#: What ``gateway_router.tls`` accepts. The other two values the specification
-#: would want are refused rather than faked -- see the module docstring.
-SUPPORTED_TLS = ("none",)
+#: What ``gateway_router.tls`` accepts -- the same three values
+#: ``tls.context.POLICIES`` defines, restated here as the venue's own public
+#: name for them.
+SUPPORTED_TLS = context.POLICIES
 
 
 class Secrets(object):
@@ -113,7 +126,8 @@ def _printable(raw):
 class GatewayRouter(object):
     """The listener that answers ``GR_REQUEST`` and nothing else."""
 
-    def __init__(self, venue, config):
+    def __init__(self, venue, config, certfile=None, keyfile=None,
+                 ca_certificate=None):
         self.venue = venue
         self.codec = NnfCodec(venue.layouts)
         self.methodology = config.get("encryption", "new")
@@ -122,15 +136,22 @@ class GatewayRouter(object):
                 "gateway_router.encryption must be 'existing' or 'new', not %r"
                 % self.methodology)
 
-        tls = str(config.get("tls", "none")).lower()
+        tls = str(config.get("tls", "1.3")).lower()
         if tls not in SUPPORTED_TLS:
             raise ConfigError(
-                "gateway_router.tls only supports %s. The specification asks "
-                "for TLS 1.3 on this leg; this simulator's reactor has no TLS "
-                "support, and serving plain TCP under a setting that says "
-                "'1.3' would be worse than refusing. See rules.ASSUMPTIONS."
-                % ", ".join(repr(value) for value in SUPPORTED_TLS))
+                "gateway_router.tls must be one of %s, not %r"
+                % (", ".join(repr(value) for value in SUPPORTED_TLS), tls))
         self.tls = tls
+        #: The CA path a member needs, for the start-up log line only -- the
+        #: control plane's own copy comes from ``venue.tls_certificate``.
+        self.ca_certificate = ca_certificate
+        try:
+            self.tls_context = context.server_context(
+                tls, certfile, keyfile, setting_name="gateway_router.tls")
+        except context.TlsUnavailable as exc:
+            # tls/ deliberately does not know about ConfigError; translating
+            # its exception into this project's is the caller's job.
+            raise ConfigError(str(exc))
         self._listener = None
         self._gateway = None
 
@@ -139,11 +160,19 @@ class GatewayRouter(object):
         return self._listener.address if self._listener else None
 
     def start(self, host, port):
-        self._listener = self.venue.reactor.listen(host, port, self._on_accept)
+        self._listener = self.venue.reactor.listen(
+            host, port, self._on_accept,
+            transport=certs.transport_factory(self.tls_context))
         self._gateway = self.venue.acceptor.address
-        log.info("gateway router on %s:%d (tls=%s, %s encryption)",
-                 self._listener.address[0], self._listener.address[1],
-                 self.tls, self.methodology)
+        if self.tls_context is None:
+            log.info("gateway router on %s:%d (tls=none, %s encryption)",
+                     self._listener.address[0], self._listener.address[1],
+                     self.methodology)
+        else:
+            log.info("gateway router on %s:%d (tls=%s, %s encryption; "
+                     "members should trust CA %s)",
+                     self._listener.address[0], self._listener.address[1],
+                     self.tls, self.methodology, self.ca_certificate)
         return self._listener.address
 
     def stop(self):

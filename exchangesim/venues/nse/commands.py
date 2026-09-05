@@ -56,12 +56,17 @@ def register(registry, venue):
                   audit=False)
     def _gateway_router(context, args):
         issued = [venue.issued(box.box_id) for box in venue.manager.boxes]
+        material = venue.tls_certificate
+        certificate = material.describe() if material is not None else {}
         return {
             "listening": (list(venue.router.address[:2])
                           if venue.router and venue.router.address else None),
             "tls": venue.router.tls if venue.router else None,
             "encryption": venue.router.methodology if venue.router else None,
             "required": venue.requires_encryption,
+            "ca_certificate": certificate.get("ca_certificate"),
+            "certificate_expires": certificate.get("not_after"),
+            "fingerprint": certificate.get("fingerprint"),
             "issued": [secrets.describe() for secrets in issued
                        if secrets is not None],
         }
