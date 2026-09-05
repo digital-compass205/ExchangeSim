@@ -28,10 +28,12 @@ from exchangesim.control.commands import CommandError
 from exchangesim.core.enums import TradingState
 from exchangesim.venues.japannext import rules as jnx_rules
 from exchangesim.venues.nse import rules as nse_rules
+from exchangesim.venues.nsefo import rules as nsefo_rules
 
 from .hkexsupport import VenueHarness as HkexHarness
 from .jnxsupport import VenueHarness as JapannextHarness
 from .nsesupport import VenueHarness as NseHarness
+from .nsefosupport import VenueHarness as NsefoHarness
 
 
 class DeclaredPhasesTest(unittest.TestCase):
@@ -66,9 +68,22 @@ class DeclaredPhasesTest(unittest.TestCase):
 
         self.assertEqual(list(TradingState.ORDER), self._states(harness))
 
+    def test_nsefo_runs_no_preopen_and_no_postclose(self):
+        """F&O publishes a pre-open and a fifth status, Postclose, that CM
+        does not have -- neither is built in this slice (see
+        rules.NOT_IMPLEMENTED), so this venue runs the plainest cycle of the
+        four."""
+        harness = NsefoHarness()
+        self.addCleanup(harness.close)
+
+        self.assertEqual(
+            [TradingState.OPEN, TradingState.CLOSED, TradingState.HALTED],
+            self._states(harness))
+
     def test_the_phases_are_offered_in_the_order_a_session_runs_them(self):
         """A menu, not a set. Alphabetical order would read as nonsense."""
-        for harness in (JapannextHarness(), NseHarness(), HkexHarness()):
+        for harness in (JapannextHarness(), NseHarness(), HkexHarness(),
+                        NsefoHarness()):
             self.addCleanup(harness.close)
             states = self._states(harness)
             positions = [TradingState.ORDER.index(name) for name in states]
@@ -103,6 +118,13 @@ class RefusalTest(unittest.TestCase):
         for state in TradingState.ORDER:
             harness.dispatch("state.set", {"state": state})
 
+    def test_nsefo_refuses_a_pre_open_it_does_not_have(self):
+        harness = NsefoHarness()
+        self.addCleanup(harness.close)
+
+        message = self._refused(harness, TradingState.PRE_OPEN)
+        self.assertIn(TradingState.OPEN, message)
+
     def test_a_phase_the_core_has_never_heard_of_is_still_refused(self):
         harness = NseHarness()
         self.addCleanup(harness.close)
@@ -116,6 +138,15 @@ class RefusalTest(unittest.TestCase):
 
         for state in (TradingState.PRE_OPEN, TradingState.OPENING_AUCTION,
                       TradingState.OPEN, TradingState.CLOSED,
+                      TradingState.HALTED):
+            result = harness.dispatch("state.set", {"state": state})
+            self.assertEqual(state, result["state"])
+
+    def test_nsefo_still_reaches_the_phases_it_does_run(self):
+        harness = NsefoHarness()
+        self.addCleanup(harness.close)
+
+        for state in (TradingState.OPEN, TradingState.CLOSED,
                       TradingState.HALTED):
             result = harness.dispatch("state.set", {"state": state})
             self.assertEqual(state, result["state"])
@@ -137,3 +168,7 @@ class WireStatusMapTest(unittest.TestCase):
     def test_nse_still_maps_every_core_phase(self):
         self.assertEqual(set(TradingState.ALL),
                          set(nse_rules.STATE_TO_MARKET_STATUS))
+
+    def test_nsefo_still_maps_every_core_phase(self):
+        self.assertEqual(set(TradingState.ALL),
+                         set(nsefo_rules.STATE_TO_MARKET_STATUS))

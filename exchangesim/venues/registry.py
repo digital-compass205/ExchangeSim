@@ -22,6 +22,11 @@ def _nse():
     return NseVenue
 
 
+def _nsefo():
+    from .nsefo.venue import NsefoVenue
+    return NsefoVenue
+
+
 def _generic():
     from .base import Venue
     return Venue
@@ -32,6 +37,7 @@ FACTORIES = {
     "japannext": _japannext,
     "hkex": _hkex,
     "nse": _nse,
+    "nsefo": _nsefo,
     "generic": _generic,
 }
 

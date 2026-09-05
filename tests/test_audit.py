@@ -33,6 +33,7 @@ from exchangesim.venues.japannext import dictionary as J
 
 from .hkexsupport import VenueHarness as HkexHarness
 from .nsesupport import VenueHarness as NseHarness
+from .nsefosupport import VenueHarness as NsefoHarness
 from .jnxsupport import VenueHarness
 
 
@@ -659,6 +660,10 @@ class AuditedCommandsTest(unittest.TestCase):
         "box.kill", "preopen.lock",
     ))
 
+    NSEFO_ONLY = frozenset((
+        "box.kill",
+    ))
+
     def audited(self, harness):
         return frozenset(command.name
                          for command in harness.registry.commands()
@@ -684,6 +689,13 @@ class AuditedCommandsTest(unittest.TestCase):
         register_builtin(harness.registry)
 
         self.assertEqual(self.SHARED | self.NSE_ONLY, self.audited(harness))
+
+    def test_nsefo_adds_only_its_own_mutating_command(self):
+        harness = NsefoHarness()
+        self.addCleanup(harness.close)
+        register_builtin(harness.registry)
+
+        self.assertEqual(self.SHARED | self.NSEFO_ONLY, self.audited(harness))
 
     def test_no_built_in_command_is_audited(self):
         """`auth` carries a token; the rest are housekeeping a client repeats."""

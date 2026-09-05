@@ -1,0 +1,170 @@
+{
+  "venue": "nsefo",
+  "name": "NSEFO-SIM",
+
+  "control": {
+    "host": "127.0.0.1",
+    "port": 9104,
+    "token": null
+  },
+
+  "log": {
+    "level": "INFO",
+    "file": null
+  },
+
+  "audit": {
+    "capacity": 2000
+  },
+
+  "nnf": {
+    "host": "127.0.0.1",
+    "port": 9031,
+    "heartbeat_interval": 30,
+    "heartbeat_drop_limit": 10,
+    "require_encryption": false,
+
+    "boxes": [
+      {
+        "box_id": 101,
+        "broker_ids": ["10123"],
+        "users": [
+          {
+            "user_id": 50521,
+            "trader_name": "DEALER ONE",
+            "broker_name": "SIMULATOR SECURITIES",
+            "user_type": "2",
+            "branch_id": 1,
+            "cancel_on_disconnect": true
+          },
+          {
+            "user_id": 50522,
+            "trader_name": "DEALER TWO",
+            "broker_name": "SIMULATOR SECURITIES",
+            "user_type": "2",
+            "branch_id": 1,
+            "cancel_on_disconnect": false
+          }
+        ]
+      },
+      {
+        "box_id": 102,
+        "broker_ids": ["10456"],
+        "users": [
+          {
+            "user_id": 50777,
+            "trader_name": "DEALER THREE",
+            "broker_name": "OTHER SECURITIES",
+            "user_type": "2",
+            "branch_id": 1,
+            "cancel_on_disconnect": false
+          }
+        ]
+      },
+      {
+        "box_id": 103,
+        "broker_ids": ["10199"]
+      }
+    ]
+  },
+
+  "gateway_router": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 9032,
+    "tls": "1.2",
+    "encryption": "new"
+  },
+
+  "markets": [
+    {
+      "name": "NORMAL",
+      "description": "Normal Market",
+      "state": "CLOSED"
+    }
+  ],
+
+  "limits": {
+    "max_order_value": null,
+    "max_quantity": null
+  },
+
+  "tape_length": 500,
+  "first_order_number": 1,
+
+  "_notes": [
+    "NSE Futures & Options runs on the same NNF Trimmed Protocol as Capital",
+    "Market, but is NOT the same dialect: transaction codes collide numerically",
+    "with CM's (2000 is BOARD_LOT_IN at both) but decode to different, larger",
+    "structures, and every private tag lives in this venue's own 9400+ range,",
+    "never CM's. See docs/specs/NSE_FO_TRANSCRIPTION.md and",
+    "exchangesim/venues/nsefo/transactions.py's module docstring for the full",
+    "list of collisions -- this is why nsefo/ has its own dictionary.py,",
+    "layouts.py and transactions.py rather than sharing Capital Market's.",
+    "",
+    "Contract identity is the genuinely new part. Capital Market keys a",
+    "security on Symbol+Series; F&O keys a contract on CONTRACT_DESC --",
+    "instrument family, symbol, expiry, strike and option type. This",
+    "simulator renders one canonical name for every surface (the book, the",
+    "audit, the board, the control plane): 'NIFTY-FUTIDX-24SEP2026' for a",
+    "future, 'RELIANCE-OPTSTK-24SEP2026-2800-CE' for an option. 'resolve_symbol'",
+    "forgives case, '_'/space in place of '-', an ISO expiry, and a strike",
+    "with or without trailing zeroes, and accepts an unambiguous partial (a",
+    "symbol and instrument family, or a symbol/instrument family/expiry, that",
+    "together name exactly one contract) -- an ambiguous one is refused rather",
+    "than guessed. A wire order is matched to a contract by an exact lookup on",
+    "the five decoded CONTRACT_DESC fields, never through the forgiving path.",
+    "",
+    "There are two listeners, exactly as Capital Market has. 'nnf.port' is",
+    "the gateway, where members trade. 'gateway_router.port' is the separate",
+    "port a member dials FIRST, to collect the session key, cryptographic",
+    "key, IV and additional key that encrypt the gateway connection. Both are",
+    "joined by the Box ID -- and Box IDs here (101-103) are chosen not to",
+    "collide with Capital Market's (1-3), since both venues may run at once",
+    "from the same repo clone.",
+    "",
+    "'gateway_router.tls' is set to '1.2' here, not the specification's own",
+    "'1.3' default: this project's Windows development interpreter (venv36,",
+    "OpenSSL 1.0.2q) cannot serve TLS 1.3 at all, and the venue refuses to",
+    "start rather than silently serving something weaker if asked for '1.3'",
+    "there. '1.2' is a floor, not a ceiling -- under OpenSSL 3.x it still",
+    "negotiates 1.3 when both ends support it. See",
+    "exchangesim/venues/nse/gateway_router.py's docstring for the full TLS",
+    "story, which is identical here; and rules.ASSUMPTIONS for why the",
+    "generated CA (var/tls-fo/gr_ca_cert1.pem -- a directory of its own, so",
+    "the two venues' generated certificates never collide) stands in for a",
+    "real exchange-issued one.",
+    "",
+    "Only the Regular Lot book of the Normal market is traded, across FUTIDX,",
+    "FUTSTK, OPTIDX and OPTSTK. Special Terms, Stop Loss/MIT, Negotiated",
+    "Trade and every other book are rejected with their own published error",
+    "codes; so are All Or None, Minimum Fill, disclosed quantity, Good Till",
+    "Cancelled/Good Till Date, give-up (a populated CounterPartyBrokerId), the",
+    "self-trade-prevention STPC bit, and the whole Spread/2L/3L order family",
+    "(refused by transaction code, since no layout for its 480-byte structure",
+    "exists at all). See 'venue.assumptions' for the full list and every code.",
+    "",
+    "The pre-open and Postclose market phases are published",
+    "(docs/specs/NSE_FO_TRANSCRIPTION.md §2.2) but not built in this slice --",
+    "this venue runs OPEN, CLOSED and HALTED only, and 'state.set' refuses the",
+    "other two rather than folding them onto the nearest phase this venue does",
+    "run.",
+    "",
+    "There is no self-trade prevention: this venue's core mode keys on the",
+    "participant code, which means something else here, exactly as Capital",
+    "Market has none. A market configured with any stp_mode but NONE is",
+    "refused at start-up.",
+    "",
+    "Reference data defaults to exchangesim/venues/nsefo/reference/contracts.csv",
+    "-- an UNVERIFIED sample universe (see that file's own header): the",
+    "underlyings and instrument families are real, but the strikes, base",
+    "prices, ticks and circuit-filter percentages are plausible rather than",
+    "quoted. Override with:",
+    "  \"reference\": {",
+    "    \"contracts\": \"reference/contracts.csv\"",
+    "  }",
+    "Each contract carries its own lot size, base price, tick and circuit",
+    "filter (a percentage of the base price), since F&O has no published",
+    "price ladder the way Capital Market's tick_sizes.csv transcribes one."
+  ]
+}
