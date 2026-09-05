@@ -1,0 +1,54 @@
+# NSE Futures & Options contract universe.
+#
+# UNVERIFIED sample data, in the same spirit as venues/nse/reference/securities.csv:
+# the underlyings and instrument families are real, and the lot sizes are the
+# right order of magnitude for their underlyings, but the strikes, base prices,
+# ticks and circuit-filter percentages are plausible rather than quoted from a
+# live contract master. Edit this file directly -- there is no loader wired to
+# it yet (Phase 1 ships the dialect and the wire layouts only).
+#
+# instrument_name  one of FUTIDX, FUTSTK, OPTIDX, OPTSTK -- CONTRACT_DESC's own
+#                  InstrumentName domain (docs/specs/NSE_FO_TRANSCRIPTION.md §1.2).
+# symbol           the underlying's own symbol -- CONTRACT_DESC.Symbol. NIFTY and
+#                  BANKNIFTY are index underlyings; the rest are single stocks
+#                  also carried in venues/nse/reference/securities.csv.
+# expiry           the contract's expiry date, ISO 8601. CONTRACT_DESC.ExpiryDate
+#                  is carried on the wire as seconds since the NSE epoch
+#                  (midnight 1-Jan-1980); this column is the human-readable date
+#                  a loader would convert.
+# strike           the option's strike price, decimal. Blank for a futures
+#                  contract, which the wire spells as the literal sentinel -1,
+#                  not zero (see layouts.StrikeScaled) -- deliberately not
+#                  written as -1 in this column so the CSV itself does not
+#                  read as a negative price.
+# option_type      CE (call), PE (put), or XX for a futures contract, where the
+#                  field is meaningless but still populated with the sentinel.
+# lot_size         the contract's market lot -- CONTRACT_DESC has no field for
+#                  this; it is exchange reference data keyed by symbol+expiry.
+# base_price       the reference price the daily price range is calculated
+#                  around, decimal rupees.
+# tick             the minimum price movement, decimal rupees.
+# band_pct         the circuit filter, as a percentage of base_price.
+#
+instrument_name,symbol,expiry,strike,option_type,lot_size,base_price,tick,band_pct
+FUTIDX,NIFTY,2026-09-24,,XX,25,25400.00,0.05,10
+FUTIDX,NIFTY,2026-10-29,,XX,25,25450.00,0.05,10
+FUTIDX,NIFTY,2026-11-26,,XX,25,25500.00,0.05,10
+FUTIDX,BANKNIFTY,2026-09-24,,XX,15,54000.00,0.05,10
+FUTIDX,BANKNIFTY,2026-10-29,,XX,15,54120.00,0.05,10
+OPTIDX,NIFTY,2026-09-24,25000.00,CE,25,420.50,0.05,10
+OPTIDX,NIFTY,2026-09-24,25000.00,PE,25,380.25,0.05,10
+OPTIDX,NIFTY,2026-09-24,25500.00,CE,25,210.75,0.05,10
+OPTIDX,NIFTY,2026-09-24,25500.00,PE,25,540.10,0.05,10
+OPTIDX,BANKNIFTY,2026-09-24,54000.00,CE,15,650.00,0.05,10
+OPTIDX,BANKNIFTY,2026-09-24,54000.00,PE,15,610.40,0.05,10
+FUTSTK,RELIANCE,2026-09-24,,XX,250,2480.00,0.05,10
+FUTSTK,RELIANCE,2026-10-29,,XX,250,2492.00,0.05,10
+FUTSTK,INFY,2026-09-24,,XX,300,1548.00,0.05,10
+FUTSTK,TCS,2026-09-24,,XX,150,3862.00,0.05,10
+OPTSTK,RELIANCE,2026-09-24,2500.00,CE,250,45.20,0.05,10
+OPTSTK,RELIANCE,2026-09-24,2500.00,PE,250,58.90,0.05,10
+OPTSTK,INFY,2026-09-24,1550.00,CE,300,32.15,0.05,10
+OPTSTK,INFY,2026-09-24,1550.00,PE,300,29.80,0.05,10
+OPTSTK,TCS,2026-09-24,3900.00,CE,150,68.45,0.05,10
+OPTSTK,TCS,2026-09-24,3900.00,PE,150,72.10,0.05,10
