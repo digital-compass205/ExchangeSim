@@ -110,6 +110,52 @@ class Timer(object):
         return self.seq < other.seq
 
 
+class _PlainTransport(object):
+    """The identity transport: what a connection carries is what goes out.
+
+    This is the seam a TLS connection replaces, and it is deliberately the only
+    thing in this module that knows a transport exists at all. The reactor must
+    not import :mod:`ssl` -- a handshake state machine is not the event loop's
+    business, and the loop stays testable without certificates. What it knows
+    instead is a duck type, in the same spirit as ``FixCodec``, ``Publisher``
+    and the ``order_ids`` generator elsewhere in this tree:
+
+    * ``receive(ciphertext) -> plaintext``  (may be empty; a TLS handshake
+      record produces no application data at all)
+    * ``transmit(plaintext) -> None``       (queued; a transport may hold it
+      until a handshake completes)
+    * ``drain() -> bytes``                  (what to actually put on the wire)
+    * ``close_notify() -> bytes``           (a graceful shutdown, if any)
+    * ``handshaken`` / ``description``
+
+    ``receive`` producing bytes to *send* is why ``drain`` is separate from
+    ``transmit``: a handshake is answered without anything being written by the
+    owner, and the reactor flushes whatever accrues either way.
+    """
+
+    __slots__ = ("_out",)
+
+    #: Nothing to negotiate, so a plain connection is usable from the first byte.
+    handshaken = True
+    description = "plain"
+
+    def __init__(self):
+        self._out = b""
+
+    def receive(self, ciphertext):
+        return ciphertext
+
+    def transmit(self, plaintext):
+        self._out += plaintext
+
+    def drain(self):
+        out, self._out = self._out, b""
+        return out
+
+    def close_notify(self):
+        return b""
+
+
 class Connection(object):
     """A buffered, non-blocking TCP connection owned by the reactor.
 
@@ -117,13 +163,18 @@ class Connection(object):
     :meth:`send` never blocks and never partially fails from the caller's point
     of view -- anything the kernel would not take is held and flushed when the
     socket reports writable.
+
+    ``_out`` holds *ciphertext* -- what goes on the wire -- so everything below
+    it (``_flush``, ``close_when_flushed``, ``_want_write``, ``_events``) is
+    identical whether or not a transport is in the way.
     """
 
     __slots__ = ("sock", "reactor", "peer", "on_data", "on_close", "on_connect",
-                 "on_error", "_out", "_closing", "_closed", "_want_write",
-                 "_connecting", "data")
+                 "on_error", "on_handshake", "_out", "_closing", "_closed",
+                 "_want_write", "_connecting", "_transport", "_handshaken",
+                 "data")
 
-    def __init__(self, sock, reactor, peer):
+    def __init__(self, sock, reactor, peer, transport=None):
         self.sock = sock
         self.reactor = reactor
         self.peer = peer
@@ -132,13 +183,23 @@ class Connection(object):
         #: Set by :meth:`Reactor.connect` for outbound connections only.
         self.on_connect = None
         self.on_error = None
+        #: Fired once, when a negotiating transport finishes its handshake. It
+        #: never fires on a plain connection, which has nothing to negotiate.
+        self.on_handshake = None
         self._out = b""
         self._closing = False
         self._closed = False
         self._want_write = False
         self._connecting = False
+        self._transport = transport if transport is not None else _PlainTransport()
+        self._handshaken = self._transport.handshaken
         #: Free-form slot for the owner to hang state off (e.g. a FIX session).
         self.data = None
+
+    @property
+    def transport(self):
+        """How this connection is secured. ``description`` names it."""
+        return self._transport
 
     @property
     def closed(self):
@@ -149,7 +210,8 @@ class Connection(object):
         """Queue bytes for transmission."""
         if self._closed or self._closing:
             return
-        self._out += payload
+        self._transport.transmit(payload)
+        self._out += self._transport.drain()
         if self._connecting:
             # Nothing can go out yet; _complete_connect flushes what accrued.
             return
@@ -177,6 +239,19 @@ class Connection(object):
         if self._closed:
             return
         self._closing = True
+        # Under TLS the peer is owed a close_notify, or it must treat the
+        # stream as truncated. A plain transport returns nothing here and takes
+        # the path below unchanged -- there is no writable event coming for
+        # bytes nobody has tried to send, so the TLS case must flush its own.
+        try:
+            notify = self._transport.close_notify()
+        except Exception:
+            log.debug("close_notify for %s failed", self.peer)
+            notify = b""
+        if notify:
+            self._out += notify
+            self._flush()
+            return
         if not self._out:
             self.close()
 
@@ -195,8 +270,32 @@ class Connection(object):
         if not chunk:
             self.close()
             return
-        if self.on_data is not None:
-            self.on_data(self, chunk)
+
+        try:
+            plain = self._transport.receive(chunk)
+        except Exception as exc:
+            # A failed handshake or a corrupt record. There is nothing to say
+            # back that the peer could read, so drop the connection.
+            log.warning("transport for %s failed: %s", self.peer, exc)
+            self.close()
+            return
+
+        # A handshake answers itself: bytes can accrue with no plaintext at all.
+        pending = self._transport.drain()
+        if pending:
+            self._out += pending
+            self._flush()
+            if self._closed:
+                return
+
+        if not self._handshaken and self._transport.handshaken:
+            self._handshaken = True
+            log.debug("%s secured: %s", self.peer, self._transport.description)
+            if self.on_handshake is not None:
+                self.on_handshake(self)
+
+        if plain and self.on_data is not None:
+            self.on_data(self, plain)
 
     def _on_writable(self):
         if self._connecting:
@@ -285,15 +384,21 @@ class Connection(object):
 
 
 class Listener(object):
-    """A listening socket. ``on_accept(connection)`` is called per client."""
+    """A listening socket. ``on_accept(connection)`` is called per client.
 
-    __slots__ = ("sock", "reactor", "on_accept", "address")
+    ``transport`` is an optional factory, ``transport(sock) -> Transport``,
+    called once per accepted socket. It is how a port is made to speak TLS
+    without this module knowing what TLS is.
+    """
 
-    def __init__(self, sock, reactor, address, on_accept):
+    __slots__ = ("sock", "reactor", "on_accept", "address", "transport")
+
+    def __init__(self, sock, reactor, address, on_accept, transport=None):
         self.sock = sock
         self.reactor = reactor
         self.address = address
         self.on_accept = on_accept
+        self.transport = transport
 
     def close(self):
         self.reactor._unregister_listener(self)
@@ -312,7 +417,18 @@ class Listener(object):
                     return
                 log.warning("accept on %s failed: %s", self.address, exc)
                 return
-            conn = self.reactor._adopt(sock, peer)
+            transport = None
+            if self.transport is not None:
+                try:
+                    transport = self.transport(sock)
+                except Exception:
+                    log.exception("cannot secure connection from %s", peer)
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+                    continue
+            conn = self.reactor._adopt(sock, peer, transport)
             try:
                 self.on_accept(conn)
             except Exception:
@@ -345,15 +461,19 @@ class Reactor(object):
 
     # -- setup -------------------------------------------------------------
 
-    def listen(self, host, port, on_accept, backlog=64):
-        # type: (str, int, callable, int) -> Listener
-        """Open a listening socket and register it."""
+    def listen(self, host, port, on_accept, backlog=64, transport=None):
+        # type: (str, int, callable, int, callable) -> Listener
+        """Open a listening socket and register it.
+
+        ``transport`` is an optional ``transport(sock) -> Transport`` factory
+        applied to every accepted connection -- the seam a TLS listener uses.
+        """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         _set_address_reuse(sock)
         sock.setblocking(False)
         sock.bind((host, port))
         sock.listen(backlog)
-        listener = Listener(sock, self, sock.getsockname(), on_accept)
+        listener = Listener(sock, self, sock.getsockname(), on_accept, transport)
         self._selector.register(sock, selectors.EVENT_READ, listener)
         self._listeners.add(listener)
         log.info("listening on %s:%d", listener.address[0], listener.address[1])
@@ -394,13 +514,13 @@ class Reactor(object):
 
         return conn
 
-    def _adopt(self, sock, peer):
+    def _adopt(self, sock, peer, transport=None):
         sock.setblocking(False)
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except OSError:
             pass  # not fatal; only affects latency, which we do not test for
-        conn = Connection(sock, self, peer)
+        conn = Connection(sock, self, peer, transport)
         self._selector.register(sock, conn._events(), conn)
         self._connections.add(conn)
         return conn
