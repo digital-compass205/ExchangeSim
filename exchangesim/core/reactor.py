@@ -330,6 +330,9 @@ class Connection(object):
 
         if self.on_connect is not None:
             self.on_connect(self)
+        # A negotiating transport has its first flight ready before the socket
+        # existed; nothing else will prompt it, so collect that here.
+        self._out += self._transport.drain()
         if self._out:
             self._flush()
 
@@ -479,8 +482,8 @@ class Reactor(object):
         log.info("listening on %s:%d", listener.address[0], listener.address[1])
         return listener
 
-    def connect(self, host, port, on_connect, on_error=None):
-        # type: (str, int, callable, callable) -> Connection
+    def connect(self, host, port, on_connect, on_error=None, transport=None):
+        # type: (str, int, callable, callable, object) -> Connection
         """Start an outbound connection, returning immediately.
 
         ``on_connect(conn)`` fires once the socket is established and
@@ -488,6 +491,12 @@ class Reactor(object):
         this returns, so the caller can store the connection first. Bytes handed
         to :meth:`Connection.send` in the meantime are buffered and flushed on
         connection.
+
+        ``transport`` is a ready-made instance rather than the factory
+        :meth:`listen` takes, because there is exactly one connection to secure.
+        A client transport has something to say before the peer does -- the
+        first flight of the handshake -- which is why :meth:`_complete_connect`
+        drains it as soon as the socket is up.
         """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setblocking(False)
@@ -496,7 +505,7 @@ class Reactor(object):
         except OSError:
             pass
 
-        conn = Connection(sock, self, (host, port))
+        conn = Connection(sock, self, (host, port), transport)
         conn.on_connect = on_connect
         conn.on_error = on_error
         conn._connecting = True
