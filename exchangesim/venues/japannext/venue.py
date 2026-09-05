@@ -55,6 +55,14 @@ class JapannextVenue(Venue):
 
     key = "japannext"
 
+    #: Japannext publishes Halted, Open and Closed and nothing else -- its
+    #: Trading Rules state outright that it runs no opening or closing auction.
+    #: ``rules.STATE_TO_TRAD_SES_STATUS`` still maps the core's other four onto
+    #: HALTED, because a map keyed on a core enum should stay total; that
+    #: fallback is not a claim the phases exist here.
+    trading_states = (TradingState.OPEN, TradingState.CLOSED,
+                      TradingState.HALTED)
+
     def __init__(self, config, reactor, publisher):
         Venue.__init__(self, config, reactor, publisher)
         self.codec = PriceCodec(PRICE_DECIMALS)
@@ -229,10 +237,9 @@ class JapannextVenue(Venue):
             if not name:
                 raise ConfigError("each entry of 'markets' needs a 'name'")
 
-            state = str(entry.get("state", default_state)).upper()
-            if state not in TradingState.ALL:
-                raise ConfigError(
-                    "market '%s' has unknown state '%s'" % (name, state))
+            state = self.check_trading_state(
+                str(entry.get("state", default_state)).upper(),
+                "market '%s'" % name)
 
             stp_mode = str(entry.get("stp_mode", default_stp)).upper()
             if stp_mode not in StpMode.ALL:

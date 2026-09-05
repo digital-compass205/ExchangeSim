@@ -109,6 +109,11 @@ class HkexVenue(Venue):
 
     key = "hkex"
 
+    #: Every phase: the POS and CAS auctions are both built, and the midday
+    #: break is a published session of this market. The only venue here that
+    #: uses the core's full vocabulary.
+    trading_states = TradingState.ORDER
+
     def __init__(self, config, reactor, publisher):
         Venue.__init__(self, config, reactor, publisher)
         self.codec = PriceCodec(PRICE_DECIMALS)
@@ -444,10 +449,9 @@ class HkexVenue(Venue):
                     "market '%s' is not a MarketSegmentID; expected one of %s"
                     % (name, ", ".join(D.MarketSegment.ALL)))
 
-            state = str(entry.get("state", default_state)).upper()
-            if state not in TradingState.ALL:
-                raise ConfigError(
-                    "market '%s' has unknown state '%s'" % (name, state))
+            state = self.check_trading_state(
+                str(entry.get("state", default_state)).upper(),
+                "market '%s'" % name)
 
             stp_mode = str(entry.get("stp_mode", default_stp)).upper()
             if stp_mode not in StpMode.ALL:

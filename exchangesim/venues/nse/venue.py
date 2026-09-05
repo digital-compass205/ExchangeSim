@@ -124,6 +124,16 @@ class NseVenue(Venue):
 
     key = "nse"
 
+    #: The pre-open, its locked window (the venue's own "Preopen ended", which
+    #: the core calls OPENING_AUCTION), continuous trading, and the two states
+    #: that stop it. **There is no lunch break** -- the Normal market runs
+    #: continuously from open to close -- and the closing session is not built,
+    #: so neither is offered. ``rules.STATE_TO_MARKET_STATUS`` still maps both
+    #: onto CLOSED, for the reason given on ``Venue.trading_states``.
+    trading_states = (TradingState.PRE_OPEN, TradingState.OPENING_AUCTION,
+                      TradingState.OPEN, TradingState.CLOSED,
+                      TradingState.HALTED)
+
     def __init__(self, config, reactor, publisher):
         Venue.__init__(self, config, reactor, publisher)
         self.codec = PriceCodec(D.PRICE_DECIMALS)
@@ -328,9 +338,8 @@ class NseVenue(Venue):
         state = str(entry.get("state",
                               self.config.get("initial_state",
                                               TradingState.CLOSED))).upper()
-        if state not in TradingState.ALL:
-            raise ConfigError("market '%s' has unknown state '%s'"
-                              % (self.market_name, state))
+        state = self.check_trading_state(
+            state, "market '%s'" % self.market_name)
 
         # NNF Capital Market has no self-trade prevention of any kind, and the
         # core's per-market mode keys on `mpid`, which this venue uses for the

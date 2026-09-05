@@ -8,6 +8,7 @@ import logging
 
 from ..audit import Audit, DEFAULT_CAPACITY, MAX_CAPACITY
 from ..core.config import ConfigError
+from ..core.enums import TradingState
 
 log = logging.getLogger(__name__)
 
@@ -101,6 +102,39 @@ class Venue(object):
         if not value:
             return None
         return value if value in self.instruments else None
+
+    #: The phases this venue actually runs, in the order a session runs them.
+    #:
+    #: The core supports every phase any venue here needs, which is not a claim
+    #: that any one venue has all of them: NSE has no lunch break, and
+    #: Japannext's rules say plainly that it runs no auction. A venue that
+    #: leaves this alone gets the full set, so nothing without an opinion
+    #: changes; one that narrows it has ``state.set`` refuse the rest, and the
+    #: board's phase menu shows only what it can honour.
+    #:
+    #: Narrowing this is not the same as removing a phase from a venue's
+    #: state-to-wire-status map. Those maps stay complete: they are keyed on a
+    #: core enum, and a fallback that can no longer be reached through a command
+    #: is cheaper than a KeyError on some future path that sets a state directly.
+    trading_states = TradingState.ORDER
+
+    def check_trading_state(self, state, where):
+        # type: (str, str) -> str
+        """``state``, or a ``ConfigError`` naming what this venue does run.
+
+        Separates the two ways a configured phase can be wrong, because they
+        have different fixes: a name the core has never heard of is a typo,
+        while a real phase this venue does not run is a misunderstanding about
+        the venue. ``--check`` reaches this, so both are caught before a port
+        is bound rather than at the first command.
+        """
+        if state not in TradingState.ALL:
+            raise ConfigError("%s has unknown state '%s'" % (where, state))
+        if state not in self.trading_states:
+            raise ConfigError(
+                "%s is set to '%s', which %s does not run; it has %s"
+                % (where, state, self.key, ", ".join(self.trading_states)))
+        return state
 
     def books_for(self, instrument):
         """The markets that should carry this instrument's book.

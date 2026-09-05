@@ -127,6 +127,14 @@ class TradingState(object):
     ALL = frozenset((PRE_OPEN, OPENING_AUCTION, OPEN, LUNCH_BREAK,
                      CLOSING_AUCTION, CLOSED, HALTED))
 
+    #: Every phase, in the order a trading day runs them -- which is how a menu
+    #: should read, and why this is a tuple where :attr:`ALL` is a set.
+    #: It is the *core's* vocabulary, not any venue's: a venue declares the
+    #: subset it actually has as ``Venue.trading_states``, and a phase outside
+    #: that subset is refused rather than folded onto the nearest thing.
+    ORDER = (PRE_OPEN, OPENING_AUCTION, OPEN, LUNCH_BREAK, CLOSING_AUCTION,
+             CLOSED, HALTED)
+
     #: States in which continuous matching occurs.
     CONTINUOUS = frozenset((OPEN,))
     #: States that accept orders onto the book without matching them.

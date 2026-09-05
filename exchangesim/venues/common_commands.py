@@ -46,16 +46,11 @@ from ..fix.message import MalformedMessage, decode
 
 log = logging.getLogger(__name__)
 
-#: Trading phases in the order a session runs through them.
-TRADING_STATE_ORDER = (
-    TradingState.PRE_OPEN,
-    TradingState.OPENING_AUCTION,
-    TradingState.OPEN,
-    TradingState.LUNCH_BREAK,
-    TradingState.CLOSING_AUCTION,
-    TradingState.CLOSED,
-    TradingState.HALTED,
-)
+#: Trading phases in the order a session runs through them. The core's full
+#: vocabulary, kept as the name this module has always exported; what a
+#: *command* offers and accepts is ``venue.trading_states``, which is a subset
+#: at every venue that has said so.
+TRADING_STATE_ORDER = TradingState.ORDER
 
 #: Reject reasons an operator may force via ``behaviour.set``.
 _REJECT_REASONS = frozenset(
@@ -97,14 +92,21 @@ def register(registry, venue):
         # The phases are listed alongside so a client offering to change one
         # need not carry its own copy of the vocabulary. They are in the order a
         # session runs, not alphabetical, because that is how a menu should read.
+        # And they are the *venue's* phases, not the core's: offering a board
+        # NSE's non-existent lunch break would be offering a button that can
+        # only produce an error.
         return {"markets": [market.describe()
                             for market in venue.markets.values()],
-                "states": list(TRADING_STATE_ORDER)}
+                "states": list(venue.trading_states)}
 
     @registry.add("state.set",
                   "Set the trading state venue-wide, per market, or per symbol.")
     def _state_set(context, args):
-        state = arg_choice(args, "state", TradingState.ALL, required=True)
+        # The venue's phases, not the core's. A venue that never enters a phase
+        # cannot represent it on the wire either -- Japannext would report a
+        # closing auction as HALTED, NSE a lunch break as CLOSED -- so accepting
+        # one would put the book in a state no client could be told about.
+        state = arg_choice(args, "state", venue.trading_states, required=True)
         market = _optional_market(venue, args)
         symbol = _optional_symbol(venue, args)
 
