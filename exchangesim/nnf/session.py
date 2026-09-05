@@ -86,6 +86,18 @@ class Application(object):
         """
         return False
 
+    def on_box_detached(self, box):
+        """A box connection is gone, after its users have been signed off.
+
+        Whatever a venue attached to the *box* rather than to a user belongs
+        here. At NSE that is the material the Gateway Router issued: the
+        document is explicit that "in the event of a box disconnection, the
+        IVs are reset at exchange end, and a new static and dynamic IV is
+        provided in GR response message to a fresh GR query", so holding them
+        past the connection would let a member reconnect on a key the exchange
+        has already discarded.
+        """
+
     def on_invalid(self, session, message, failure):
         """The dialect refused a message. Return True when answered."""
         return False
@@ -290,6 +302,7 @@ class BoxConnection(object):
             self._sign_off(session, reason)
         self.users = {}
         log.info("box %d disconnected: %s", self.box_id, reason)
+        self.application.on_box_detached(self)
 
     def disconnect(self, reason="disconnected"):
         transport = self.transport

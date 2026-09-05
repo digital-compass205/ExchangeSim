@@ -45,7 +45,8 @@ from exchangesim.tls.transport import TlsTransport
 from exchangesim.venues.nse import dictionary as D
 from exchangesim.venues.nse import transactions as X
 
-from tests.nsesupport import BOX_ONE, BROKER_ONE, BROKER_TWO, VenueHarness, venue_config
+from tests.nsesupport import (BOX_ONE, BROKER_ONE, BROKER_TWO, BoxClient,
+                             VenueHarness, venue_config)
 from tests.support import connect, pump, pump_until
 
 UNKNOWN_BOX = 999
@@ -238,6 +239,23 @@ class PlainRouterTest(unittest.TestCase):
         secrets = self.harness.venue.issued(BOX_ONE)
         self.assertIsNotNone(secrets)
         self.assertEqual(secrets.session_key, response.get(D.SESSION_KEY))
+
+    def test_a_box_disconnecting_discards_what_it_was_issued(self):
+        """The document resets the IVs at the exchange on a box disconnection
+        and expects a fresh GR query for the next connection. Holding them
+        would hand a cipher to a box that reconnected without dialling the
+        router, garbling the connection rather than refusing it -- and, with
+        require_encryption off, making a plain reconnect impossible on any box
+        that had ever collected a key."""
+        client = self._client()
+        client.request(BOX_ONE, BROKER_ONE)
+        pump(self.harness.reactor)
+        self.assertIsNotNone(self.harness.venue.issued(BOX_ONE))
+
+        member = BoxClient(self.harness.venue, BOX_ONE, BROKER_ONE)
+        member.box.detach("test")
+
+        self.assertIsNone(self.harness.venue.issued(BOX_ONE))
 
     def test_an_unconfigured_box_is_refused(self):
         client = self._client()

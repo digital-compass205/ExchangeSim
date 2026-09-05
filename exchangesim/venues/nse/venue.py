@@ -537,6 +537,18 @@ class NseVenue(Venue):
     def issued(self, box_id):
         return self._issued.get(int(box_id))
 
+    def forget(self, box_id):
+        """Discard what a box was issued, because its connection has gone.
+
+        The specification resets the IVs at the exchange on a box
+        disconnection and expects a fresh GR query for the next one. Keeping
+        them would leave a box that reconnects *without* dialling the router
+        being handed a cipher its client never agreed to, which garbles the
+        connection instead of refusing it -- and, with require_encryption off,
+        makes a plain reconnect impossible on any box that ever collected a key.
+        """
+        return self._issued.pop(int(box_id), None)
+
     def session_key_for(self, box_id):
         secrets = self.issued(box_id)
         return secrets.session_key if secrets is not None else None

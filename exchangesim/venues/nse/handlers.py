@@ -200,6 +200,12 @@ class NseApplication(Application):
                      len(events), session.target_comp_id)
         self._emit(session, events)
 
+    def on_box_detached(self, box):
+        """Discard the box's issued key material -- see :meth:`NseVenue.forget`."""
+        if self.venue.forget(box.box_id) is not None:
+            log.info("box %d: issued key material discarded on disconnect",
+                     box.box_id)
+
     def on_message(self, session, message):
         self._sessions[session.key] = session
         handler = _HANDLERS.get(int(message.msg_type))
