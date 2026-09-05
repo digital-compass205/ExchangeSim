@@ -16,8 +16,12 @@ import os
 import re
 import unittest
 
-STYLESHEET = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "exchangesim", "web", "static", "style.css")
+_STATIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "exchangesim", "web", "static")
+
+STYLESHEET = os.path.join(_STATIC, "style.css")
+FAVICON = os.path.join(_STATIC, "favicon.svg")
+INDEX = os.path.join(_STATIC, "index.html")
 
 #: WCAG AA for body text.
 FLOOR = 4.5
@@ -169,6 +173,66 @@ class PaletteStructureTest(unittest.TestCase):
         body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
         stray = re.findall(r"(#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\))", body)
         self.assertEqual(stray, [])
+
+
+class FaviconTest(unittest.TestCase):
+    """The one place outside the stylesheet that is allowed to write a colour.
+
+    ``favicon.svg`` is loaded through ``<img>`` and as the tab icon, and an SVG
+    loaded that way cannot see the page's custom properties -- so its two hues
+    have to be literals. That is precisely the drift
+    :meth:`PaletteStructureTest.test_no_colour_is_written_outside_the_two_palettes`
+    exists to prevent, so the exception is paid for here: the four literals must
+    be the palette's own red and green, in both themes. Repoint a hue and this
+    fails rather than leaving the tab a different red from the board.
+    """
+
+    def setUp(self):
+        self.dark, self.light = palettes(read_stylesheet())
+        with open(FAVICON, encoding="utf-8") as handle:
+            self.svg = handle.read()
+
+    def _fills(self):
+        """``{"dark": {class: colour}, "light": {...}}`` from the SVG's style.
+
+        Split on the media query the same way :func:`palettes` splits the
+        stylesheet: what precedes it is the default (dark), what follows is the
+        light override.
+        """
+        style = re.search(r"<style>(.*?)</style>", self.svg, re.S)
+        self.assertIsNotNone(style, "favicon.svg defines no <style> block")
+        text = style.group(1)
+        split = text.index("@media")
+        blocks = {"dark": text[:split], "light": text[split:]}
+        return {theme: dict(re.findall(r"\.([a-z]+)\s*\{\s*fill:\s*([^;]+);", body))
+                for theme, body in blocks.items()}
+
+    def test_the_mark_wears_the_palette_s_own_hues(self):
+        fills = self._fills()
+        for theme, palette in (("dark", self.dark), ("light", self.light)):
+            for role, hue in (("buy", "hue-red"), ("sell", "hue-green")):
+                self.assertIn(role, fills[theme],
+                              "favicon.svg defines no .%s fill for %s"
+                              % (role, theme))
+                self.assertEqual(
+                    parse_colour(resolve(palette, hue)),
+                    parse_colour(fills[theme][role]),
+                    "favicon.svg's %s %s is %s, but --%s is %s"
+                    % (theme, role, fills[theme][role], hue,
+                       resolve(palette, hue)))
+
+    def test_the_mark_states_a_light_theme_of_its_own(self):
+        """Without the media query the tab icon keeps the dark hues on a light
+        desktop, which is the same mistake the stylesheet's two blocks avoid."""
+        self.assertIn("prefers-color-scheme: light", self.svg)
+
+    def test_the_page_asks_for_the_mark_twice(self):
+        """Once as the tab icon and once beside the wordmark -- one file, so
+        the two can never disagree."""
+        with open(INDEX, encoding="utf-8") as handle:
+            page = handle.read()
+        self.assertIn('rel="icon"', page)
+        self.assertEqual(2, page.count("/static/favicon.svg"))
 
 
 class ContrastTest(unittest.TestCase):

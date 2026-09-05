@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" role="img"
+     aria-label="ExchangeSim">
+  <!--
+    Two arrows meeting head-on: a match. Buy is the red one and sell the green
+    one, the Japanese convention the whole board uses, and buy sits on the right
+    because that is where `board.buy_side` puts it by default.
+
+    Drawn on a 16-unit grid because 16px is the size that has to work: the
+    arrowheads carry the shape at that size and the shafts only read once the
+    mark is larger, so the heads are deliberately the larger half. The gap
+    between the two tips is 1.2 units -- a little over a pixel in a tab -- which
+    is what stops the pair reading as one bow tie.
+
+    The four colours are literals because an SVG loaded through <img> cannot see
+    the page's custom properties. That is exactly the drift `style.css` has a
+    test to prevent, so `tests/test_web_palette.py` checks these four against
+    --hue-red and --hue-green in both themes. Change the palette and that test
+    tells you to change this file too.
+
+    Dark is the default and light is the media query, matching how `style.css`
+    is ordered: a browser that states no preference gets the dark mark.
+  -->
+  <style>
+    .sell { fill: #5ec97a; }
+    .buy  { fill: #f38a80; }
+
+    @media (prefers-color-scheme: light) {
+      .sell { fill: #12703a; }
+      .buy  { fill: #b32a1d; }
+    }
+  </style>
+
+  <polygon class="sell"
+           points="0.4,6 3.2,6 3.2,2 7.5,8 3.2,14 3.2,10 0.4,10"/>
+  <polygon class="buy"
+           points="15.6,6 12.8,6 12.8,2 8.5,8 12.8,14 12.8,10 15.6,10"/>
+</svg>

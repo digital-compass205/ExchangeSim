@@ -169,9 +169,21 @@ h2 {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--accent);
+}
+
+/* Sized in em so the mark tracks the wordmark rather than a fixed pixel count.
+   The width and height attributes on the element itself are the fallback that
+   stops the header reflowing while the image loads. */
+.brand-mark {
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
 }
 
 .bar label {
