@@ -318,6 +318,21 @@ class Layout(object):
                             % (self.name, self.msg_type, field.name,
                                seen[offset], offset))
                 seen[offset] = field.name
+
+        # Every byte accounted for, not merely the last one. `body_size` is the
+        # furthest a field reaches, so a field omitted from the middle of a
+        # structure leaves a hole that both checks above are blind to: the
+        # fields still stop in the right place, and nothing overlaps. That is
+        # the transcription slip this test exists to catch, and declaring the
+        # reserved runs is what makes catching it possible.
+        for offset in range(self.header.size, self.body_size):
+            if offset not in seen:
+                end = offset
+                while end < self.body_size and end not in seen:
+                    end += 1
+                return ("%s (%s): %d byte(s) at offset %d belong to no field; "
+                        "either a field is missing or a reserved run is short"
+                        % (self.name, self.msg_type, end - offset, offset))
         return None
 
     def decode(self, raw, message=None):
