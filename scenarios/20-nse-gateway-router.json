@@ -1,0 +1,41 @@
+{
+  "name": "NSE: the Gateway Router's TLS leg, and GR_REQUEST/GR_RESPONSE",
+  "protocol": "nnf",
+  "fix_port": 9022,
+  "control_port": 9103,
+  "server_comp_id": "NSE-SIM",
+
+  "sessions": {
+    "member": {
+      "comp_id": "40521",
+      "protocol": "nnf",
+      "tls": {"policy": "1.2", "ca_cert": "var/tls/gr_ca_cert1.pem",
+              "server_hostname": "localhost"}
+    }
+  },
+
+  "steps": [
+    {"comment": "The Gateway Router is the ONLY TLS hop in NSE's connection sequence -- the member dials it (here, port 9022) under TLS to collect a session key and a fresh AES-256-GCM key/IV, then opens the gateway itself (port 9021, scenario 17) over plain TCP with that encryption layered above it, exactly as published. 35=transaction code, 9004=ErrorCode, 9170=BoxId, 9120=BrokerId, 9171=IpAddress, 9172=Port."},
+
+    {"comment": "GR_REQUEST (2400) for box 3, entitled to broker 10199. Box 3 carries no users and is not dialled at the gateway by any other scenario: a box that collects secrets here encrypts every message from SECURE_BOX_REGISTRATION_REQUEST onward for the rest of the daemon's life, so reusing box 1 or 2 (which 17/18/19 sign on to in the clear) would silently break them the next time this daemon runs those scenarios."},
+    {"send": "member", "fields": {"35": "2400", "9004": "0", "9170": "3", "9120": "10199"}},
+
+    {"comment": "GR_RESPONSE (2401), error 0. Asserting the shape only: error code, the box id echoed back, and the gateway's port (9021, from config -- stable, not something the exchange assigns per run). The session key and the four cryptographic fields are fresh random bytes on every call and are deliberately not asserted on."},
+    {"expect": "member", "fields": {"35": "2401", "9004": "0", "9170": "3", "9120": "10199", "9172": "9021"}},
+
+    {"comment": "The router answers one request and closes the connection (close_when_flushed). Drop it explicitly so the next 'send' opens a fresh TLS handshake rather than writing to a socket the peer has already closed."},
+    {"disconnect": "member"},
+
+    {"comment": "A Box ID nothing in config/nse.json configures. 16588 is USER_IP_REC_NOT_FOUND."},
+    {"send": "member", "fields": {"35": "2400", "9004": "0", "9170": "9999", "9120": "10123"}},
+    {"expect": "member", "fields": {"35": "2401", "9004": "16588", "9170": "9999"}},
+
+    {"disconnect": "member"},
+
+    {"comment": "Box 3 again, but with a broker it is not entitled to. 16041 is INVALID_BROKER_OR_BRANCH."},
+    {"send": "member", "fields": {"35": "2400", "9004": "0", "9170": "3", "9120": "99999"}},
+    {"expect": "member", "fields": {"35": "2401", "9004": "16041", "9170": "3", "9120": "99999"}},
+
+    {"disconnect": "member"}
+  ]
+}

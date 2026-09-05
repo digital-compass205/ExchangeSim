@@ -60,6 +60,10 @@
             "cancel_on_disconnect": false
           }
         ]
+      },
+      {
+        "box_id": 3,
+        "broker_ids": ["10199"]
       }
     ]
   },
@@ -129,6 +133,15 @@
     "sequence: a box that never collected a key from the router is refused at",
     "registration. False, the default, lets a client be pointed straight at",
     "the gateway while it is being brought up.",
+    "",
+    "Box 3 carries no users and is never dialled at the gateway (port 9021) --",
+    "it exists only so scenarios/20-nse-gateway-router.json can collect real",
+    "secrets from the router without touching a box (1 or 2) that other NSE",
+    "scenarios also sign on to in the clear. A box that has collected secrets",
+    "encrypts every message after SECURE_BOX_REGISTRATION_REQUEST, on a",
+    "process-lifetime box id, not per connection -- reusing box 1 or 2 for a",
+    "successful GR_REQUEST would silently break any later cleartext scenario",
+    "that dials the same box id in the same daemon.",
     "",
     "Only the Regular Lot book of the Normal market is traded. Special Terms,",
     "Stop Loss, Odd Lot, Spot, Auction and Call Auction 2 are rejected with",

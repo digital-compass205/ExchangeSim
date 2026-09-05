@@ -39,6 +39,23 @@ invocation covers every simulator a CI run has started::
 reset, as HKEX does: the scenario restarts its own numbering and asks the venue
 to do the same with the ``session.reset`` control command.
 
+A session that dials a TLS listener -- NSE's Gateway Router -- declares it as
+a nested object rather than flat fields, so it stays readable::
+
+    "sessions": {
+      "member": {
+        "comp_id": "40521",
+        "protocol": "nnf",
+        "tls": {"policy": "1.2", "ca_cert": "var/tls/gr_ca_cert1.pem",
+                "server_hostname": "localhost"}
+      }
+    }
+
+``policy`` defaults to ``"1.2"`` and ``server_hostname`` to ``"localhost"``.
+``ca_cert`` is resolved relative to the repo root (the scenario file's
+directory's parent), not the current working directory, so the scenario runs
+the same from wherever it is launched.
+
 Exit codes: 0 all scenarios passed, 1 a step failed, 2 usage, 3 could not
 reach the simulator.
 """
@@ -48,6 +65,7 @@ import glob
 import json
 import os
 import socket
+import ssl
 import sys
 import time
 
@@ -56,6 +74,7 @@ from ..core.clock import RealClock
 from ..fix import constants as C
 from ..fix.codec import FixCodec
 from ..fix.message import Message
+from ..tls import context as tls_context
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -98,12 +117,47 @@ def _client_codec(protocol, begin_string, server_comp_id):
     raise ScenarioError("unknown protocol '%s'" % protocol)
 
 
+#: Defaults for a session's ``tls`` block -- see ``_resolve_tls``.
+DEFAULT_TLS_POLICY = "1.2"
+DEFAULT_TLS_HOSTNAME = "localhost"
+
+
+def _resolve_tls(spec, repo_root):
+    """Turn a session's ``tls`` block into what ``Session.connect`` needs, or
+    ``None`` when the session declares no TLS at all.
+
+    ``ca_cert`` is resolved relative to the repo root -- the scenario file's
+    directory's parent, since every scenario here lives one level under it --
+    rather than the process's current working directory, so a scenario behaves
+    the same whether it is launched from the repo root (as every documented
+    command in this project is) or from anywhere else.
+    """
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        raise ScenarioError("session 'tls' must be an object")
+    ca_cert = spec.get("ca_cert")
+    if not ca_cert:
+        raise ScenarioError(
+            "session tls needs a 'ca_cert' naming the CA a client must trust")
+    policy = spec.get("policy", DEFAULT_TLS_POLICY)
+    if policy not in tls_context.POLICIES or policy == "none":
+        raise ScenarioError(
+            "session tls policy must be '1.2' or '1.3', not %r" % (policy,))
+    cafile = ca_cert if os.path.isabs(ca_cert) else os.path.join(repo_root, ca_cert)
+    return {
+        "policy": policy,
+        "cafile": cafile,
+        "server_hostname": spec.get("server_hostname", DEFAULT_TLS_HOSTNAME),
+    }
+
+
 class Session(object):
     """One scripted FIX client."""
 
     def __init__(self, name, comp_id, host, port, server_comp_id, sub_id=None,
                  timeout=5.0, begin_string="FIX.4.2", logon_fields=None,
-                 logon_reset_flag=True, protocol="fix"):
+                 logon_reset_flag=True, protocol="fix", tls=None):
         self.name = name
         self.comp_id = comp_id
         self.server_comp_id = server_comp_id
@@ -111,6 +165,9 @@ class Session(object):
         self.host = host
         self.port = port
         self.timeout = timeout
+        #: None for plain TCP, else the dict ``_resolve_tls`` built: "policy",
+        #: "cafile" and "server_hostname" for ``tls.context.client_context``.
+        self.tls = tls
         #: The dialect's BeginString(8). FIXT.1.1 for a FIX 5.0 venue.
         self.begin_string = begin_string
         #: Extra tags every Logon carries -- FIXT.1.1 requires 789 and 1137.
@@ -131,12 +188,44 @@ class Session(object):
 
     def connect(self):
         try:
-            self.sock = socket.create_connection((self.host, self.port),
-                                                 self.timeout)
+            sock = socket.create_connection((self.host, self.port),
+                                            self.timeout)
         except OSError as exc:
             raise ControlClientError(
                 "session '%s' cannot connect to %s:%d: %s"
                 % (self.name, self.host, self.port, exc))
+
+        if self.tls is not None:
+            # A client socket here is blocking (socket.create_connection), so
+            # TLS is a plain ssl.SSLContext.wrap_socket -- not the reactor's
+            # TlsTransport, which exists for the non-blocking side.
+            #
+            # A policy of "1.2" is a floor, not a pin: client_context sets
+            # only a minimum version, so it negotiates happily against a
+            # server configured for either "1.2" or "1.3". That is what lets
+            # one scenario file work unmodified on this dev box (OpenSSL
+            # 1.0.2, no TLS 1.3 at all) and on the RHEL 8 target, which
+            # actually serves "1.3".
+            try:
+                ssl_context = tls_context.client_context(
+                    self.tls["policy"], self.tls["cafile"])
+                sock = ssl_context.wrap_socket(
+                    sock, server_hostname=self.tls["server_hostname"])
+            except (ssl.SSLError, OSError, tls_context.TlsUnavailable) as exc:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                # A bare connect error and a certificate/handshake failure
+                # look identical to socket.create_connection's own except
+                # clause above; naming this one explicitly as TLS is what
+                # saves an operator from chasing a "cannot connect" report
+                # that was actually a certificate mismatch.
+                raise ControlClientError(
+                    "session '%s' TLS handshake with %s:%d failed: %s"
+                    % (self.name, self.host, self.port, exc))
+
+        self.sock = sock
         self.sock.settimeout(0.1)
         return self
 
@@ -199,7 +288,13 @@ class Session(object):
             return
         try:
             chunk = self.sock.recv(65536)
-        except socket.timeout:
+        except (socket.timeout, ssl.SSLWantReadError):
+            # A plain socket signals "nothing arrived within the timeout"
+            # with socket.timeout; an SSLSocket can signal the same thing
+            # with SSLWantReadError instead. ssl.SSLError is itself an
+            # OSError subclass, so the bare "except OSError" below already
+            # catches this -- named explicitly so a scenario never fails
+            # intermittently in a way that looks like a protocol bug.
             return
         except OSError:
             return
@@ -315,6 +410,7 @@ class Runner(object):
             raise ScenarioError("%s: 'sessions' must be an object" % scenario.path)
 
         data = scenario.data
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(scenario.path)))
         sessions = {}
         for name, spec in declared.items():
             if isinstance(spec, str):
@@ -322,6 +418,10 @@ class Runner(object):
             comp_id = spec.get("comp_id")
             if not comp_id:
                 raise ScenarioError("session '%s' needs a 'comp_id'" % name)
+            try:
+                tls = _resolve_tls(spec.get("tls"), repo_root)
+            except ScenarioError as exc:
+                raise ScenarioError("session '%s': %s" % (name, exc))
             sessions[name] = Session(
                 name, comp_id, self.host,
                 spec.get("port", data.get("fix_port", self.fix_port)),
@@ -330,7 +430,8 @@ class Runner(object):
                 begin_string=data.get("begin_string", "FIX.4.2"),
                 logon_fields=spec.get("logon_fields", data.get("logon_fields")),
                 logon_reset_flag=data.get("logon_reset_flag", True),
-                protocol=spec.get("protocol", data.get("protocol", "fix")))
+                protocol=spec.get("protocol", data.get("protocol", "fix")),
+                tls=tls)
         return sessions
 
     # -- step execution ----------------------------------------------------

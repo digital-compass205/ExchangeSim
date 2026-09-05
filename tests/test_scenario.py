@@ -8,11 +8,14 @@ import io
 import json
 import os
 import shutil
+import socket
+import ssl
 import sys
 import tempfile
 import threading
 import unittest
 
+from exchangesim.cli.client import ControlClientError
 from exchangesim.control.builtin import register as register_builtin
 from exchangesim.control.commands import CommandRegistry
 from exchangesim.control.server import ControlServer
@@ -24,9 +27,12 @@ from exchangesim.scenario.runner import (
     Runner,
     Scenario,
     ScenarioError,
+    Session,
     _matches,
+    _resolve_tls,
     main,
 )
+from exchangesim.tls import certs, context
 from exchangesim.venues.japannext.venue import JapannextVenue
 
 from .jnxsupport import CLIENT1, CLIENT2, venue_config
@@ -379,6 +385,123 @@ class ThirdProtocolTest(unittest.TestCase):
         from exchangesim.fix.codec import FixCodec
         self.assertEqual(FixCodec().logon_defaults(30),
                          {"35": "A", "98": "0", "108": "30"})
+
+
+class TlsSessionConfigTest(unittest.TestCase):
+    """Resolving a session's ``tls`` block -- pure, no sockets involved."""
+
+    def test_no_tls_block_is_none(self):
+        self.assertIsNone(_resolve_tls(None, "/repo/root"))
+
+    def test_defaults_and_a_relative_ca_cert_resolve_against_the_repo_root(self):
+        resolved = _resolve_tls({"ca_cert": "var/tls/gr_ca_cert1.pem"},
+                                "/repo/root")
+
+        self.assertEqual("1.2", resolved["policy"])
+        self.assertEqual("localhost", resolved["server_hostname"])
+        self.assertEqual(os.path.join("/repo/root", "var/tls/gr_ca_cert1.pem"),
+                         resolved["cafile"])
+
+    def test_explicit_fields_are_honoured_and_an_absolute_ca_cert_is_untouched(self):
+        resolved = _resolve_tls(
+            {"policy": "1.3", "ca_cert": "/abs/ca.pem",
+             "server_hostname": "gateway.example"},
+            "/repo/root")
+
+        self.assertEqual("1.3", resolved["policy"])
+        self.assertEqual("gateway.example", resolved["server_hostname"])
+        self.assertEqual("/abs/ca.pem", resolved["cafile"])
+
+    def test_a_missing_ca_cert_is_a_clear_scenario_error(self):
+        with self.assertRaises(ScenarioError) as caught:
+            _resolve_tls({"policy": "1.2"}, "/repo/root")
+        self.assertIn("ca_cert", str(caught.exception))
+
+    def test_an_unsupported_policy_is_a_clear_scenario_error(self):
+        with self.assertRaises(ScenarioError) as caught:
+            _resolve_tls({"ca_cert": "x.pem", "policy": "none"}, "/repo/root")
+        self.assertIn("policy", str(caught.exception))
+
+    def test_a_non_object_tls_block_is_a_clear_scenario_error(self):
+        with self.assertRaises(ScenarioError):
+            _resolve_tls("1.2", "/repo/root")
+
+
+class TlsHandshakeTest(unittest.TestCase):
+    """A ``Session`` with a ``tls`` block over a real, blocking socket.
+
+    Deliberately independent of any venue -- NSE's Gateway Router is
+    exercised end-to-end by ``scenarios/20-nse-gateway-router.json`` instead.
+    This only pins the runner's own wiring: it builds a client context, wraps
+    the socket ``connect()`` already opened, and turns a bad certificate into
+    a named TLS failure rather than a bare "cannot connect".
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tls_dir = tempfile.mkdtemp(prefix="exsim-scenario-tls-")
+        store = certs.CertificateStore(cls.tls_dir, common_name="localhost",
+                                       names=("localhost",))
+        cls.issued = store.ensure()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tls_dir, ignore_errors=True)
+
+    def _serve_one_handshake(self):
+        """A bare TLS listener: accepts one connection, completes the
+        handshake and closes -- in a thread, so the test's Session can use a
+        real blocking ``connect()`` against it."""
+        server_context = context.server_context(
+            "1.2", self.issued.certificate, self.issued.key)
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        address = listener.getsockname()
+
+        def serve():
+            try:
+                conn, _peer = listener.accept()
+            except OSError:
+                return
+            try:
+                wrapped = server_context.wrap_socket(conn, server_side=True)
+                wrapped.close()
+            except (ssl.SSLError, OSError):
+                pass
+
+        thread = threading.Thread(target=serve)
+        thread.daemon = True
+        thread.start()
+        self.addCleanup(listener.close)
+        self.addCleanup(thread.join, 1.0)
+        return address
+
+    def _session(self, address, cafile):
+        return Session("member", "TLSTEST", address[0], address[1], "SIM",
+                       tls={"policy": "1.2", "cafile": cafile,
+                            "server_hostname": "localhost"})
+
+    def test_a_session_with_tls_completes_a_real_handshake(self):
+        address = self._serve_one_handshake()
+        session = self._session(address, self.issued.ca_certificate)
+        self.addCleanup(session.close)
+
+        session.connect()
+
+        self.assertIsInstance(session.sock, ssl.SSLSocket)
+
+    def test_a_missing_ca_cert_file_fails_as_a_named_tls_error(self):
+        address = self._serve_one_handshake()
+        session = self._session(
+            address, os.path.join(self.tls_dir, "no-such-ca.pem"))
+
+        with self.assertRaises(ControlClientError) as caught:
+            session.connect()
+
+        message = str(caught.exception)
+        self.assertIn("member", message)
+        self.assertIn("TLS", message)
 
 
 if __name__ == "__main__":
