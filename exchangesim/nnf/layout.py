@@ -79,13 +79,18 @@ class Field(object):
 
 
 def _default_converter(wire):
-    """Text for a character array, an integer for everything else.
+    """Text for a character array or a raw byte run, an integer for
+    everything else.
+
+    ``Raw`` carries a value above the wire as a latin-1 string, the identity
+    mapping on bytes (see its own docstring) -- exactly what ``V.TEXT`` is,
+    and not a number, so it needs the same converter ``Char`` does.
 
     A price is the exception and says so at its call site: the wire carries
     paise and the field carries the decimal string every other surface here
     speaks, which is what :class:`Scaled` is for.
     """
-    return V.TEXT if isinstance(wire, T.Char) else V.NUMBER
+    return V.TEXT if isinstance(wire, (T.Char, T.Raw)) else V.NUMBER
 
 
 class Scaled(V.Converter):
