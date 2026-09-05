@@ -34,24 +34,40 @@ ALL_TOPICS = "*"
 #: Commands that place orders, refused when order entry is disabled.
 ORDER_ENTRY_COMMANDS = frozenset(("order.new",))
 
-#: Commands that move a market between phases. Gated separately from order
-#: entry because they are a different kind of power: closing a market expires
-#: every resting order on it, including other clients' -- so a board can be
-#: made a trading terminal without also being an operator console, or the
-#: reverse.
-MARKET_CONTROL_COMMANDS = frozenset((
-    "state.set", "state.clear", "stp.set",
-    "auction.lock", "auction.reference",
-    # NSE's pre-open is locked the same way HKEX's auction is: it ends order
-    # entry for everyone on the market, so it is a market power, not a trade.
-    "preopen.lock",
-))
-
 #: Commands that read the message audit. Gated on their own, and not by
 #: ``allow_order_entry``, because they are a third kind of power: the audit
 #: shows every client's traffic -- ClOrdIDs, sizes, prices -- so a board that
 #: may not place an order should not thereby be able to read everyone else's.
 AUDIT_COMMANDS = frozenset(("audit", "audit.entry", "audit.types"))
+
+#: Every command that changes nothing. **This is the whole of what an
+#: unprivileged board may call**, and the reason it is spelled this way round.
+#:
+#: The gate used to be three allowlists of *powers*, so a command in none of
+#: them was ungated -- and fourteen were, ``orders.cancel_all`` among them,
+#: which cancels every resting order on a market including other clients'. That
+#: is exactly the power ``allow_market_control`` exists to withhold, and a board
+#: with every flag off could still call it. The failure was structural, not an
+#: oversight: classifying by power fails *open*, so forgetting to classify a new
+#: command silently grants it.
+#:
+#: Listing the queries instead fails *closed*. A new mutating command is refused
+#: until somebody decides which power it needs; a new query is refused until it
+#: is listed here, which is visible and harmless. ``ReadOnlyCommandsTest`` binds
+#: this list to the registries' own ``audit`` flags at every venue, so it cannot
+#: drift from what the commands actually do.
+READ_ONLY_COMMANDS = frozenset((
+    # Control-plane built-ins.
+    "auth", "help", "ping", "subscribe", "unsubscribe",
+    # Venue and market description.
+    "venue.info", "venue.assumptions", "markets", "instruments", "segments",
+    "state.get", "sessions", "behaviour.list",
+    # Market data.
+    "bbo", "book", "ladder", "orders", "order.get", "stats", "trades",
+    "auction", "preopen",
+    # NSE's connection view, and the two dialect readers.
+    "boxes", "gateway_router", "transactions", "smp",
+)) | AUDIT_COMMANDS
 
 #: Idle comment sent down each stream so intermediaries do not time it out.
 KEEPALIVE_SECONDS = 20.0
@@ -233,12 +249,23 @@ class WebApp(object):
             responder.error(403, "order entry is disabled on this server")
             return
 
-        if command in MARKET_CONTROL_COMMANDS and not self.allow_market_control:
-            responder.error(403, "market control is disabled on this server")
-            return
-
         if command in AUDIT_COMMANDS and not self.allow_audit:
             responder.error(403, "the audit view is disabled on this server")
+            return
+
+        # Market control is the catch-all: every mutating command that is not
+        # governed by one of the named powers above needs it. Written as "not a
+        # query, and not otherwise classified" rather than as a list of what it
+        # covers, so a command nobody has classified is refused rather than
+        # allowed -- see READ_ONLY_COMMANDS for what that cost before.
+        #
+        # Excluding the named powers is what keeps the switches independent: a
+        # board may be a trading terminal without being an operator console, so
+        # order.new answers to allow_order_entry and to nothing else.
+        if (command not in READ_ONLY_COMMANDS
+                and command not in ORDER_ENTRY_COMMANDS
+                and not self.allow_market_control):
+            responder.error(403, "market control is disabled on this server")
             return
 
         try:

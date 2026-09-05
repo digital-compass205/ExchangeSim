@@ -6,7 +6,8 @@ import unittest
 from exchangesim.core.clock import FixedClock
 from exchangesim.core.config import Config, ConfigError
 from exchangesim.core.reactor import Reactor
-from exchangesim.web.app import WebApp
+from exchangesim.web.app import (AUDIT_COMMANDS, ORDER_ENTRY_COMMANDS,
+                                 READ_ONLY_COMMANDS, WebApp)
 from exchangesim.web.main import build_board
 
 from .websupport import (
@@ -551,6 +552,102 @@ class EventStreamTest(AppTest):
         self.reactor._expire_timers()
 
         self.assertEqual(0, len(self.app.streams))
+
+
+class ReadOnlyCommandsTest(unittest.TestCase):
+    """``READ_ONLY_COMMANDS`` against what the commands actually do.
+
+    The board gates by exclusion -- anything not listed as a query needs the
+    operator power -- so the list has to stay true to the registries, at every
+    venue, or it either withholds a harmless query or grants a dangerous one.
+    ``Command.audit`` is the same flag ``test_audit.py`` pins per venue: True
+    for a command that changes something. This ties the two together.
+    """
+
+    def _registries(self):
+        from exchangesim.control.builtin import register as register_builtin
+        from .hkexsupport import VenueHarness as Hkex
+        from .jnxsupport import VenueHarness as Japannext
+        from .nsefosupport import VenueHarness as NseFo
+        from .nsesupport import VenueHarness as Nse
+
+        for cls in (Japannext, Hkex, Nse, NseFo):
+            harness = cls()
+            self.addCleanup(harness.close)
+            register_builtin(harness.registry)
+            yield harness.registry
+
+    def _split(self):
+        read_only, mutating = set(), set()
+        for registry in self._registries():
+            for command in registry.commands():
+                (mutating if command.audit else read_only).add(command.name)
+        return read_only, mutating
+
+    def test_no_mutating_command_is_treated_as_a_query(self):
+        """The finding this list exists for: ``orders.cancel_all`` and thirteen
+        others reached the venue with every capability flag off."""
+        _read_only, mutating = self._split()
+
+        self.assertEqual(set(), mutating & READ_ONLY_COMMANDS)
+
+    def test_every_query_is_listed_so_a_viewer_can_still_read(self):
+        read_only, _mutating = self._split()
+
+        self.assertEqual(set(), read_only - READ_ONLY_COMMANDS)
+
+    def test_the_two_named_powers_are_disjoint_from_the_queries(self):
+        """Order entry is not a query; the audit is one, and is listed, but it
+        carries its own flag as well because it exposes other clients' traffic."""
+        self.assertEqual(set(), ORDER_ENTRY_COMMANDS & READ_ONLY_COMMANDS)
+        self.assertTrue(AUDIT_COMMANDS <= READ_ONLY_COMMANDS)
+
+
+class UnclassifiedCommandTest(AppTest):
+    """A command nobody has classified must be refused, not forwarded."""
+
+    def test_an_unknown_command_needs_the_operator_power(self):
+        self.app.allow_order_entry = False
+        self.app.allow_market_control = False
+
+        status, payload = self.result_of(
+            json_request("/api/japannext/something.new"))
+
+        self.assertEqual(403, status)
+        self.assertEqual([], self.link.calls)
+        self.assertIn("market control", payload["error"]["message"])
+
+    def test_the_previously_ungated_commands_are_now_refused(self):
+        self.app.allow_order_entry = False
+        self.app.allow_market_control = False
+        self.app.allow_audit = False
+
+        for command in ("orders.cancel_all", "order.cancel", "session.kill",
+                        "session.reset", "box.kill", "instrument.add",
+                        "instrument.set", "instrument.remove",
+                        "reference.reload", "stats.reset", "behaviour.set",
+                        "behaviour.clear", "smp.register", "smp.clear"):
+            status, _payload = self.result_of(
+                json_request("/api/japannext/%s" % command))
+            self.assertEqual(403, status, command)
+        self.assertEqual([], self.link.calls)
+
+    def test_an_operator_board_still_reaches_all_of_them(self):
+        """The refusal must not have taken away what the flag is meant to grant."""
+        for command in ("orders.cancel_all", "session.kill", "instrument.set"):
+            status, _payload = self.result_of(
+                json_request("/api/japannext/%s" % command))
+            self.assertEqual(200, status, command)
+
+    def test_a_viewer_can_still_read_the_market(self):
+        self.app.allow_order_entry = False
+        self.app.allow_market_control = False
+
+        for command in ("bbo", "book", "ladder", "trades", "stats",
+                        "instruments", "markets", "sessions"):
+            status, _payload = self.result_of(
+                json_request("/api/japannext/%s" % command))
+            self.assertEqual(200, status, command)
 
 
 if __name__ == "__main__":
