@@ -6,7 +6,7 @@ the venue's own protocol and cannot tell the difference, but you can open and
 close the market whenever you like, watch the order book in a browser, place
 orders by hand, and read back every message that crossed the wire.
 
-Three venues ship today:
+Four venues ship today:
 
 | Venue | Protocol | Port | Control port |
 |---|---|---|---|
@@ -15,6 +15,8 @@ Three venues ship today:
 | | OCG-C — the same protocol as FIX 5.0 SP2 over FIXT.1.1 | 9012 | |
 | **NSE India** Capital Market | NNF Trimmed Protocol | 9021 | 9103 |
 | | NNF — the Gateway Router that issues the keys | 9022 | |
+| **NSE India** Futures & Options | NNF Trimmed Protocol, F&O structures | 9031 | 9104 |
+| | NNF — its own Gateway Router | 9032 | |
 
 HKEX publishes OCG-C in two interchangeable encodings and this serves both, on
 one set of books: a binary client and a FIX client trade with each other.
@@ -24,6 +26,13 @@ big-endian, encrypted with AES-256-GCM under a key collected from a separate
 Gateway Router connection, and with a *box* — one TCP connection — carrying
 several signed-on users at once. All of that is served, including the pre-open
 call auction.
+
+NSE runs cash and derivatives as two separate trading systems, so they are two
+venues here: the F&O gateway is its own port with its own boxes and users, and
+a contract is named by five fields -- underlying, family, expiry, strike and
+option type -- rather than a symbol. Futures and options trade on the Regular
+Lot book; spreads and the stop-loss book are refused with their published error
+codes.
 
 A real venue's UAT is open only during published windows, needs booked slots and
 credentials, is shared with everyone else, and cannot be told to halt a stock
@@ -72,7 +81,8 @@ bin/exchangesim start          # or: python -m exchangesim.ctl.main start
 japannext    started (pid 24191)  fix=9001 control=9101
 hkex         started (pid 24192)  fix=9012 binary=9011 control=9102
 nse          started (pid 24193)  nnf=9021 router=9022 control=9103
-web          started (pid 24194)  http=9200
+nsefo        started (pid 24194)  nnf=9031 router=9032 control=9104
+web          started (pid 24195)  http=9200
 ```
 
 Open **<http://127.0.0.1:9200>**.

@@ -1,6 +1,6 @@
 # ExchangeSim — detailed documentation
 
-Everything beyond getting it running: how it is built, how the three venues
+Everything beyond getting it running: how it is built, how the four venues
 differ, what each behaviour was transcribed from, and where a specification was
 silent and a choice had to be made.
 
@@ -68,12 +68,16 @@ exchangesim/
                 session layer in which a connection is a box carrying many users
   wire/         what every protocol here shares: the acceptor that binds a
                 connection to a session, and value conversion
+  tls/          TLS on a MemoryBIO for the reactor's transport seam, and the
+                DER/RSA/X.509 that issue the certificate it serves
   venues/
     common_commands.py  every venue-agnostic control command
     japannext/  the Japannext dialect, rules, handlers and reference data
     hkex/       the HKEX OCG-C dialect, likewise
     nse/        the NSE Capital Market dialect, its structures, its circuit
                 filters and its pre-open
+    nsefo/      the NSE Futures & Options dialect: the same protocol, its own
+                structures under the same transaction codes
   web/          the browser board: its own process, a client of the venues
   control/      JSON-lines control server and command registry
   cli/          the exsim command-line client
@@ -84,7 +88,7 @@ config/         one JSON file per venue instance, the web board's, services.json
 scenarios/      example scenarios; the CI suite
 var/            runtime state: logs, pidfiles, FIX sequence stores
 tools/          pdftext.py, a stdlib PDF text extractor for reading venue specs
-tests/          1,554 tests, unittest only
+tests/          1,749 tests, unittest only
 ```
 
 Three layers with a hard dependency rule — arrows point inwards only, and
@@ -119,17 +123,17 @@ mass-cancel reason. The session layer gained four options for FIXT.1.1, all
 defaulting off, so FIX 4.2 behaviour is byte-identical. Nothing in `core/` knows
 the word "HKEX".
 
-### Where the three venues differ
+### Where the four venues differ
 
-| | Japannext | HKEX | NSE |
-|---|---|---|---|
-| Protocol | FIX 4.2 | FIX 5.0 SP2 over FIXT.1.1, in two encodings | NNF — not FIX in any encoding |
-| Session | ResendRequest recovery, client may reset at Logon | `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** | no sequence numbers, no resend, no session-level Reject |
-| A connection | is a session | is a session | is a **box**, carrying many signed-on users |
-| Order handle | `ClOrdID(11)` | `ClOrdID(11)` | **none** — the exchange's `OrderNumber` |
-| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all | Symbol **and** Series together |
-| Market routing | `TargetSubID(57)` per message | the security's segment — no message names a market | one market; the book type is checked and every book but Regular Lot refused |
-| Price limits | one band table around the nominal price | two rules: the 9-times rule and the quotation rule (see below) | a per-security circuit filter, as a percentage of the previous close |
+| | Japannext | HKEX | NSE Cash | NSE F&O |
+|---|---|---|---|---|
+| Protocol | FIX 4.2 | FIX 5.0 SP2 over FIXT.1.1, in two encodings | NNF — not FIX in any encoding | the same NNF, its own structures under the same transaction codes |
+| Session | ResendRequest recovery, client may reset at Logon | `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** | no sequence numbers, no resend, no session-level Reject | the same |
+| A connection | is a session | is a session | is a **box**, carrying many signed-on users | the same |
+| Order handle | `ClOrdID(11)` | `ClOrdID(11)` | **none** — the exchange's `OrderNumber` | the same |
+| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all | Symbol **and** Series together | `CONTRACT_DESC` — five fields; a future's strike is **-1** |
+| Market routing | `TargetSubID(57)` per message | the security's segment — no message names a market | one market; the book type is checked and every book but Regular Lot refused | the same; book 3 conflates Stop Loss with MIT |
+| Price limits | one band table around the nominal price | two rules: the 9-times rule and the quotation rule (see below) | a per-security circuit filter, as a percentage of the previous close | the same, per contract |
 | Order type / TIF | `OrdType(40)`, `TimeInForce(59)` | the same | **bits** of `ST_ORDER_FLAGS` |
 | Auctions | none — the rules say so outright | POS and CAS, five tie-break rules | the pre-open, four tie-break rules |
 | Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)` | none |

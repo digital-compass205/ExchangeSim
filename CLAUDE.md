@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An exchange simulator that stands in for a venue's test environment in CI/CD. Three venues:
+An exchange simulator that stands in for a venue's test environment in CI/CD. Four venues:
 
 - **Japannext PTS** equities over FIX 4.2.
 - **HKEX securities** over OCG-C, covering board-lot continuous trading and the POS/CAS call auctions. HKEX publishes OCG-C in **two encodings of one protocol** -- FIX 5.0 SP2 on a FIXT.1.1 session, and a fixed-width binary format -- and both are served, on one set of books.
 - **NSE India Capital Market** over the NNF Trimmed Protocol, covering the Regular Lot book and the pre-open call auction. This one is **not FIX in any encoding**: a proprietary fixed-width big-endian format with its own sign-on, no sequence numbers, no resend, an exchange-assigned order number in place of a client order ID, AES-256-GCM on every message, and a connection that is a *box* carrying many signed-on users.
+- **NSE India Futures & Options** over the same NNF protocol, covering futures and options on the Regular Lot book. NSE runs it as a *separate trading system* -- its own gateway, its own boxes and users -- so it is its own venue package, and it is the reason `nnf/` was built knowing nothing about a segment. A contract is named by `CONTRACT_DESC`, five fields rather than two.
 
 See `README.md` for the user guide, `DETAILED_DOC.md` for architecture, venue rules and known gaps, and `docs/specs/README.md` for what each specification required.
 
@@ -39,6 +40,7 @@ $PY -m exchangesim.runner.main --config config/japannext.json --check   # valida
 $PY -m exchangesim.runner.main --config config/japannext.json           # one venue, foreground
 $PY -m exchangesim.runner.main --config config/hkex.json                # binary 9011, FIX 9012, control 9102
 $PY -m exchangesim.runner.main --config config/nse.json                 # NNF 9021, gateway router 9022, control 9103
+$PY -m exchangesim.runner.main --config config/nsefo.json               # NNF 9031, gateway router 9032, control 9104
 
 $PY -m exchangesim.web.main --config config/web.json    # web board on :9200 (its own process)
 
@@ -48,6 +50,7 @@ $PY -m exchangesim.cli.exsim --port 9102 audit --seq 7  # one entry, field by fi
 $PY -m exchangesim.cli.exsim --port 9102 instruments    # same CLI, any venue
 $PY -m exchangesim.cli.exsim --port 9103 call boxes    # NSE: the connections, as against the users on them
 $PY -m exchangesim.cli.exsim --port 9103 call preopen  # NSE: the indicative auction price, security by security
+$PY -m exchangesim.cli.exsim --port 9104 instruments   # NSE F&O: the contract universe
 $PY -m exchangesim.scenario.runner "scenarios/*.json"   # end-to-end suite; needs *every* venue running
 
 $PY tools/pdftext.py spec.pdf --grep OrdType            # read venue spec PDFs (stdlib only)
@@ -96,27 +99,27 @@ Everything else NSE needs is above the core. Nothing in `core/` learned the word
 
 A new venue also inherits its whole control surface: `venues/common_commands.py` holds every venue-agnostic command (trading state, instruments, market data, orders, behaviour, sessions) and a venue's own `commands.py` calls `common_commands.register(registry, venue)` before adding what only it can provide. For Japannext that residue is one command, `venue.assumptions`; for HKEX it is that plus the SMP registry and `segments`; for NSE it is `boxes`, `box.kill`, `gateway_router`, `preopen`, `preopen.lock` and `transactions`. The test is mechanical: a command that needs `from .dictionary import ...` belongs to the venue, everything else is shared.
 
-### Where the three venues differ, and why it matters
+### Where the four venues differ, and why it matters
 
 Reach for any venue module as a template only after checking these, because each row is a place where copying one into another would be wrong.
 
-| | Japannext | HKEX | NSE |
-|---|---|---|---|
-| Protocol | FIX 4.2 | FIX 5.0 SP2, two encodings | **not FIX at all**: NNF, fixed-width, big-endian |
-| Session | ResendRequest recovery, client may reset at Logon | `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** (use `session.reset`) | no sequence numbers, no resend, no session-level Reject; recovery is a message download |
-| A connection is | a session | a session | a **box**, carrying many signed-on users; dropping it signs off every one |
-| Identity | CompID pair | CompID pair (one on the wire in binary) | a numeric User ID, over a numeric Box ID |
-| Order handle | `ClOrdID(11)` | `ClOrdID(11)` | **none**: amend and cancel name the exchange's own `OrderNumber` |
-| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all | `SEC_INFO`: Symbol **and** Series, neither of which names a security alone |
-| Market routing | `TargetSubID(57)` per message | the security's `segment` column — no message names a market | one market; the book type names it, and every book but Regular Lot is refused |
-| Price limits | one band table around the nominal price | **two** rules: the multiplicative 9-times rule against the nominal price (`rules.NineTimesRule`, not a table), and the quotation rule against the live BBO (`StandardValidator._check_quotation`) | a circuit filter that is a **percentage** of the base price, set **per security** (`rules.CircuitFilter`, from the `band` column) |
-| Order type and TIF | `OrdType(40)`, `TimeInForce(59)` | the same | **bits** of `ST_ORDER_FLAGS`; neither scalar field exists |
-| Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` | the pre-open, with a **four**-rule chain: no surplus-direction tie-break |
-| Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` | **none**, and a market configured with any mode is refused at start-up |
-| Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message | none; every field of a structure is always on the wire |
-| Acknowledgement | only for an order that rests untraded | **before** matching -- `Market(ack_on_entry=True)` | **before** matching, for the same reason and more sharply: the acknowledgement is where the client learns the order number |
-| Rejection | `OrdRejReason(103)` on an Execution Report | its own reject codes | a numeric `ErrorCode` in the header of the erroring form of the same transaction |
-| Encryption | none | none (the credential is opaque) | **AES-256-GCM on every message**, under a key collected from a separate Gateway Router port |
+| | Japannext | HKEX | NSE Cash | NSE F&O |
+|---|---|---|---|---|
+| Protocol | FIX 4.2 | FIX 5.0 SP2, two encodings | **not FIX at all**: NNF, fixed-width, big-endian | the same NNF, and the same 40-byte header -- but its **own structures under the same transaction codes** |
+| Session | ResendRequest recovery, client may reset at Logon | `NextExpectedMsgSeqNum(789)` negotiation, client reset **refused** (use `session.reset`) | no sequence numbers, no resend, no session-level Reject; recovery is a message download | the same |
+| A connection is | a session | a session | a **box**, carrying many signed-on users; dropping it signs off every one | the same |
+| Identity | CompID pair | CompID pair (one on the wire in binary) | a numeric User ID, over a numeric Box ID | the same, on its own boxes and its own gateway |
+| Order handle | `ClOrdID(11)` | `ClOrdID(11)` | **none**: amend and cancel name the exchange's own `OrderNumber` | the same |
+| Instrument | `Symbol(55)` | `SecurityID(48)`; `Symbol` is not in the dialect at all | `SEC_INFO`: Symbol **and** Series, neither of which names a security alone | `CONTRACT_DESC`: **five** fields -- symbol, instrument type, expiry, strike, option type. A future's strike is **-1**, not 0 |
+| Market routing | `TargetSubID(57)` per message | the security's `segment` column — no message names a market | one market; the book type names it, and every book but Regular Lot is refused | the same, and book 3 conflates Stop Loss with MIT |
+| Price limits | one band table around the nominal price | **two** rules: the multiplicative 9-times rule against the nominal price (`rules.NineTimesRule`, not a table), and the quotation rule against the live BBO (`StandardValidator._check_quotation`) | a circuit filter that is a **percentage** of the base price, set **per security** (`rules.CircuitFilter`, from the `band` column) | the same, per **contract** |
+| Order type and TIF | `OrdType(40)`, `TimeInForce(59)` | the same | **bits** of `ST_ORDER_FLAGS`; neither scalar field exists | the same name, **different bits**: `OnStop` splits into `SL`/`MIT`, and STPC moves to a second `ADDITIONAL_ORDER_FLAGS` byte |
+| Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` | the pre-open, with a **four**-rule chain: no surplus-direction tie-break | none built; its pre-open and its fifth status, Postclose, are published but unimplemented |
+| Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` | **none**, and a market configured with any mode is refused at start-up | none either, though an `STPC` bit exists on the wire and is refused |
+| Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message | none; every field of a structure is always on the wire | the same |
+| Acknowledgement | only for an order that rests untraded | **before** matching -- `Market(ack_on_entry=True)` | **before** matching, for the same reason and more sharply: the acknowledgement is where the client learns the order number | the same |
+| Rejection | `OrdRejReason(103)` on an Execution Report | its own reject codes | a numeric `ErrorCode` in the header of the erroring form of the same transaction | the same, from its **own** table -- 16521 means different things at the two venues |
+| Encryption | none | none (the credential is opaque) | **AES-256-GCM on every message**, under a key collected from a separate Gateway Router port | the same, over its own router on its own port |
 
 Repeating groups needed **no codec change**: `Message` keeps fields ordered and offers `get_all`/`append`, so a group is read positionally. What that cannot do is check the count, so `hkex/handlers.py:_check_count` does, rejecting a mismatch with `SessionRejectReason=16`. Any new group needs the same.
 
@@ -209,6 +212,39 @@ the Box ID and which code is the heartbeat are all arguments. That is what
 `tests/test_nnf_codec.py` pins, with a layout defined in the test file, and it
 is what lets Futures & Options land later as a second dictionary and a second
 set of layouts over the same machinery.
+
+### The second segment, and what it cost
+
+Futures & Options did land that way: `nnf/`, `tls/` and `core/` needed **no
+change at all** to carry it, and `venues/nsefo/` is a dictionary, a layout set,
+rules, handlers and a venue. That is the claim above, tested.
+
+What it also showed is that a transaction code is not an identity. **The same
+number carries a different structure in each segment** -- `BOARD_LOT_IN (2000)`
+is 290 bytes of Capital Market and 316 of F&O, `SIGN_ON_REQUEST (2300)` 276
+against 278, and ten codes collide in all. `ST_ORDER_FLAGS` is worse, because it
+collides *silently*: same name, same two bytes, different bits, with `OnStop`
+split into `SL`/`MIT` and `STPC` moved out to a second `ADDITIONAL_ORDER_FLAGS`
+byte the cash market has no equivalent of. Nothing in a decode would complain.
+
+Three consequences worth keeping:
+
+- **Never share a `D`/`X` module across the two.** `BOX_ID` is 9170 at Capital
+  Market and 9650 here, so a message built with one venue's constants and
+  encoded against the other's layouts sets the wrong fields and reports success.
+  That is why `venues/nsefo/gateway_router.py` is a copy rather than an import,
+  despite the wire structures being identical -- the *tags* are not.
+- **A scenario names its dialect.** `scenario/runner.py` hard-coded Capital
+  Market's layouts for every `"nnf"` scenario until F&O arrived; `"dialect":
+  "nsefo"` selects the other, and `"nse"` remains the default.
+- **`tests/test_nsefo_dictionary.py` asserts the collisions by name**, and that
+  no tag number means one thing in one dictionary and something else in the
+  other. The 9400+ reservation Capital Market wrote down is what made that
+  assertion possible rather than aspirational.
+
+A future's `StrikePrice` is **-1**, not 0 -- the protocol breaking its own "zero
+means absent" rule, and the one place where reading the sibling document's
+convention across would be wrong.
 
 ### Auctions
 

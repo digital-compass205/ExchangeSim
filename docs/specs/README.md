@@ -91,7 +91,7 @@ Still genuinely unbuilt, and rejected rather than faked: the odd/special lot
 book, quotes (`35=S/Z/AI`), trade capture (`35=AE/AR`), drop copy, and the
 Volatility Control Mechanism.
 
-## NSE India, Capital Market (in progress)
+## NSE India, Capital Market (implemented: Regular Lot and the pre-open)
 
 Index: <https://www.nseindia.com/static/trade/platform-services-neat-trading-system-protocols>
 
@@ -141,3 +141,24 @@ Regular Lot order, on the same reasoning as HKEX's odd lots. Also deliberately
 unbuilt: the UDP multicast broadcast feed (it is LZO-compressed, and LZO cannot
 be done under the stdlib-only constraint), the closing call auction, trade
 modification and cancellation, disclosed quantity, and the freeze/approval flow.
+
+## NSE India — Futures & Options
+
+`TP_FO_Trimmed_NNF_PROTOCOL_9.50_20260820170606.pdf`, transcribed field by field
+with page citations into **`NSE_FO_TRANSCRIPTION.md`** beside this file, which is
+what `venues/nsefo/` was built from.
+
+The same protocol as Capital Market and the same 40-byte header — and, under the
+same transaction codes, **different structures**: `MS_OE_REQUEST` is 316 bytes
+against the cash market's 290, `MS_SIGNON` 278 against 276, and ten codes collide
+in all. `ST_ORDER_FLAGS` keeps its name and its width but changes its bits, with
+`OnStop` split into `SL`/`MIT` and `STPC` moved to a second
+`ADDITIONAL_ORDER_FLAGS` byte the cash market does not have. A contract is named
+by `CONTRACT_DESC` — instrument type, symbol, expiry, strike, option type — and a
+future's strike is **-1**, not zero.
+
+Futures and options on the Regular Lot book are implemented, with continuous
+matching. Deliberately unbuilt and refused with their published codes: the whole
+spread/two-leg family, the Stop Loss and MIT book, Special Terms, give-up, and
+the pre-open and Postclose sessions — the latter a fifth market status the cash
+market has no equivalent of.
