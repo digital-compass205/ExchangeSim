@@ -31,8 +31,20 @@
     <select id="state-set" title="move this market to another phase"></select>
   </span>
 
-  <button type="button" id="view-toggle" class="view-toggle" hidden
-          title="switch between the board and the message audit">audit</button>
+  <!-- A pair of radios rather than one button: a button labelled "audit" has
+       to be read as either where you are or where you would go, and it was
+       being read the wrong way. Two options, one of them lit, says both at
+       once. Same construction as the ticket's Buy/Sell: hidden inputs, and a
+       class the script sets, because :has() is too recent to assume. -->
+  <span class="views" id="view-switch" role="radiogroup"
+        aria-label="board or audit" hidden>
+    <label class="view selected">
+      <input type="radio" name="view" value="board" checked> board
+    </label>
+    <label class="view">
+      <input type="radio" name="view" value="audit"> audit
+    </label>
+  </span>
 
   <span id="feed" class="feed feed-down" title="event stream">offline</span>
 </header>

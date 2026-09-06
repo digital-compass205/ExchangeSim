@@ -40,7 +40,7 @@
    "l1-lot", "auction", "auc-kind", "auc-iep", "auc-iev", "auc-imbalance",
    "auc-reference", "auc-band", "auc-reason",
    "state-control", "state-set",
-   "view-toggle", "board-view", "audit-view", "audit-rows", "audit-scope",
+   "view-switch", "board-view", "audit-view", "audit-rows", "audit-scope",
    "audit-kind", "audit-direction", "audit-type", "audit-since", "audit-until",
    "audit-no-heartbeats", "audit-scroll",
    "audit-pause", "audit-count", "audit-detail-title", "audit-detail-fields",
@@ -201,7 +201,7 @@
         state.marketControl = !!payload.allow_market_control;
         el["state-control"].hidden = !state.marketControl;
         state.audit = payload.allow_audit !== false;
-        el["view-toggle"].hidden = !state.audit;
+        el["view-switch"].hidden = !state.audit;
         el["owner-name"].textContent = OWNER;
         applyBoardLayout(payload.board);
         return loadMarkets();
@@ -641,7 +641,7 @@
     state.view = name;
     el["board-view"].hidden = name !== "board";
     el["audit-view"].hidden = name !== "audit";
-    el["view-toggle"].textContent = name === "board" ? "audit" : "board";
+    markView(name);
 
     if (name === "audit") {
       loadAuditTypes()
@@ -907,9 +907,25 @@
     loadMarkets().catch(function (error) { fail(error.message); });
   });
 
-  el["view-toggle"].addEventListener("click", function () {
-    setView(state.view === "board" ? "audit" : "board");
-  });
+  /* The radios are the control, so the class only follows them -- setting it
+     anywhere else would let the lit half and the checked input disagree. */
+  function markView(name) {
+    Array.prototype.forEach.call(
+      el["view-switch"].querySelectorAll(".view"),
+      function (label) {
+        var radio = label.querySelector("input");
+        radio.checked = radio.value === name;
+        label.classList.toggle("selected", radio.checked);
+      });
+  }
+
+  Array.prototype.forEach.call(
+    el["view-switch"].querySelectorAll("input[name=view]"),
+    function (radio) {
+      radio.addEventListener("change", function () {
+        if (radio.checked) { setView(radio.value); }
+      });
+    });
 
   ["audit-scope", "audit-kind", "audit-direction", "audit-type",
    "audit-since", "audit-until", "audit-no-heartbeats"].forEach(function (id) {

@@ -246,19 +246,34 @@ select, input[type="number"], input[type="text"] {
 
 .control button:hover { background: var(--accent-soft); }
 
-.view-toggle {
+/* Board or audit, as a segmented pair. Both are always on screen and the one
+   you are on is lit, so the control states where you are as well as where you
+   can go -- which a single button reading "audit" could not. */
+.views { display: inline-flex; gap: 1px; }
+
+.view {
   background: transparent;
   color: var(--ink-dim);
   border: 1px solid var(--panel-edge);
-  border-radius: 3px;
   padding: 0.18rem 0.7rem;
-  font: inherit;
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   cursor: pointer;
 }
-.view-toggle:hover { color: var(--ink); border-color: var(--ink-faint); }
+.view:first-child { border-radius: 3px 0 0 3px; }
+.view:last-child { border-radius: 0 3px 3px 0; }
+.view input { position: absolute; opacity: 0; pointer-events: none; }
+.view:hover { color: var(--ink); border-color: var(--ink-faint); }
+.view:focus-within { outline: 1px solid var(--accent); }
+
+/* Selection is marked by a class the script sets, for the same reason the
+   ticket's sides are: :has() is too recent to assume here. */
+.view.selected {
+  background: var(--accent-soft);
+  color: var(--ink);
+  border-color: var(--accent);
+}
 
 .feed { font-size: 11px; letter-spacing: 0.06em; }
 .feed-live { color: var(--ok); }
@@ -670,9 +685,8 @@ table { width: 100%; border-collapse: collapse; }
   letter-spacing: 0.06em;
 }
 
-/* Scoped to the filter bar on purpose: `.view-toggle` in the header is its own
-   class token and does not collide, but a bare `.toggle` here would be one more
-   name in a flat namespace waiting to be reused. */
+/* Scoped to the filter bar on purpose: a bare `.toggle` would be one more name
+   in a flat namespace waiting to be reused. */
 .audit-list .filters .toggle {
   display: flex;
   align-items: center;

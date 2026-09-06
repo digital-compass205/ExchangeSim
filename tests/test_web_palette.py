@@ -15,6 +15,8 @@ applies to it.
 import os
 import re
 import unittest
+import xml.dom.minidom
+import xml.parsers.expat
 
 _STATIC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "exchangesim", "web", "static")
@@ -220,6 +222,20 @@ class FaviconTest(unittest.TestCase):
                     "favicon.svg's %s %s is %s, but --%s is %s"
                     % (theme, role, fills[theme][role], hue,
                        resolve(palette, hue)))
+
+    def test_the_mark_is_well_formed_xml(self):
+        """SVG is XML, and a browser parses it strictly: one malformed byte and
+        the tab shows nothing and the wordmark shows a broken image, with no
+        error anywhere a person would look.
+
+        This caught a real one. XML forbids ``--`` *inside* a comment, and the
+        prose above the polygons used it twice as a dash and twice more naming
+        a custom property, so every browser refused the file outright.
+        """
+        try:
+            xml.dom.minidom.parseString(self.svg.encode("utf-8"))
+        except xml.parsers.expat.ExpatError as exc:
+            self.fail("favicon.svg is not well-formed XML: %s" % exc)
 
     def test_the_mark_states_a_light_theme_of_its_own(self):
         """Without the media query the tab icon keeps the dark hues on a light
