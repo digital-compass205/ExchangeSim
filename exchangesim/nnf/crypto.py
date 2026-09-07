@@ -26,7 +26,9 @@ the packet prefix. Its IV is a static half and a dynamic counter: the counter is
 **incremented before every encryption and decremented before every decryption**,
 from two independent copies. That asymmetry is the easiest thing here to get
 backwards, and getting it backwards is invisible -- a simulator talking to
-itself round-trips perfectly and fails against every real client.
+itself round-trips perfectly and fails against every real client. The same trap
+catches that counter's *byte order*: it is the memory of a C struct rather than
+a wire field, so it is little-endian where everything else here is big-endian.
 
 Both IVs are sixteen bytes, which is *not* GCM's ninety-six bit fast path, so
 ``J0`` comes from GHASH rather than from concatenation. An implementation that
@@ -34,7 +36,10 @@ only handles the fast path passes every self-test and produces wrong ciphertext
 against OpenSSL, so the NIST vectors in the tests include a long-IV case.
 """
 
+import logging
 import struct
+
+log = logging.getLogger(__name__)
 
 #: GCM works on 128-bit blocks whatever the key length.
 BLOCK_BYTES = 16
@@ -409,45 +414,111 @@ class NewCipher(Cipher):
     travels. The simulator is the exchange, so that is the default; the test
     harness and the scenario runner pass ``client=True``.
 
-    ASSUMPTION: the specification gives the dynamic half as a C ``long long``
-    inside a struct and does not say how it is laid out once incremented. It is
-    written big-endian here, as every other multi-byte value in this protocol
-    is; ``dynamic_big_endian=False`` is the other reading, should a client
-    disagree.
+    The dynamic half is laid out **little-endian**, which is the one thing here
+    that looks like a mistake and is not. Both documents settle it in
+    pseudocode (CM 6.6 p.256, F&O 9.50 p.315): what is handed to OpenSSL is the
+    address of a C struct::
+
+        typedef struct {
+            char      caStaticIv[8];   // Static IV (8 bytes)
+            long long lDynamicIv;      // Dynamic IV (64-bit integer)
+        } CRYPTOGRAPHIC_IV_KEY;
+
+    So the sixteen bytes the cipher sees are that struct's *memory*, and on the
+    Linux x86-64 the annexure names as its reference platform a ``long long``
+    is stored low byte first. Every other multi-byte value in this protocol is
+    big-endian **on the wire**; this one never reaches the wire, which is
+    exactly why it differs -- and reading it big-endian is invisible in a
+    simulator talking to itself while failing against every real client, which
+    is what it did.
+
+    ``dynamic_endian`` takes ``"big"`` for a client that normalises the field
+    into network order before using it, and ``"auto"``, which decides from the
+    first message that authenticates and pins that reading for the rest of the
+    connection. Detection works at all because a wrong IV makes GCM's tag fail
+    rather than yield plausible garbage; it needs only these two candidates
+    because the exchange issues a dynamic IV of **zero** (see
+    ``gateway_router.issue``), which is the one starting value where a client
+    that byte-swaps the Gateway Router's field and a client that copies it
+    straight into the struct agree.
     """
 
     name = "new"
 
-    def __init__(self, key, iv, aad, client=False, dynamic_big_endian=True):
+    #: The struct layouts a client may hand OpenSSL, likeliest first.
+    ENDIANNESS = ("little", "big")
+
+    _FORMATS = {"little": "<q", "big": ">q"}
+
+    def __init__(self, key, iv, aad, client=False, dynamic_endian="little"):
         if len(iv) != IV_BYTES:
             raise ValueError("IV is %d bytes, not %d" % (len(iv), IV_BYTES))
         if len(aad) != AAD_BYTES:
             raise ValueError("additional key is %d bytes, not %d"
                              % (len(aad), AAD_BYTES))
+        if dynamic_endian not in ("auto",) + self.ENDIANNESS:
+            raise ValueError("dynamic_endian must be 'auto', 'little' or "
+                             "'big', not %r" % (dynamic_endian,))
         self._gcm = Gcm(key)
         self._aad = aad
         self._static = iv[:STATIC_IV_BYTES]
-        self._format = ">q" if dynamic_big_endian else "<q"
-        start = struct.unpack(self._format, iv[STATIC_IV_BYTES:])[0]
-        self._sending = start
-        self._receiving = start
+        self._dynamic = iv[STATIC_IV_BYTES:]
+        #: The layouts still to try, or None once one of them has worked.
+        self._candidates = (list(self.ENDIANNESS)
+                            if dynamic_endian == "auto" else None)
+        #: What is in force. Under 'auto' this is the fallback until a message
+        #: settles it, so a connection on which the exchange somehow speaks
+        #: first is still encrypted rather than stuck.
+        self.dynamic_endian = (self.ENDIANNESS[0] if self._candidates
+                               else dynamic_endian)
+        #: Steps taken, not absolute counter values: the value the counter
+        #: starts from depends on the layout, which 'auto' does not know yet.
+        self._sent = 0
+        self._received = 0
         #: +1 towards the exchange, -1 away from it.
         self._send_step = 1 if client else -1
         self._receive_step = -self._send_step
 
-    def _iv(self, dynamic):
-        return self._static + struct.pack(self._format, _wrap(dynamic))
+    def _iv(self, steps, endian):
+        fmt = self._FORMATS[endian]
+        start = struct.unpack(fmt, self._dynamic)[0]
+        return self._static + struct.pack(fmt, _wrap(start + steps))
 
     def seal(self, data):
-        self._sending += self._send_step
-        return self._gcm.encrypt(self._iv(self._sending), data, self._aad)
+        self._settle(self.dynamic_endian, "nothing has been decrypted yet")
+        self._sent += self._send_step
+        return self._gcm.encrypt(self._iv(self._sent, self.dynamic_endian),
+                                 data, self._aad)
 
     def open(self, data, checksum):
-        self._receiving += self._receive_step
         if checksum is None:
             raise CryptoError("an authenticated message carries no tag")
-        return self._gcm.decrypt(self._iv(self._receiving), data, checksum,
-                                 self._aad)
+        self._received += self._receive_step
+        if self._candidates is None:
+            return self._gcm.decrypt(
+                self._iv(self._received, self.dynamic_endian), data, checksum,
+                self._aad)
+        return self._detect(data, checksum)
+
+    def _detect(self, data, checksum):
+        """Try each layout, and keep whichever one authenticates."""
+        for endian in self._candidates:
+            try:
+                plain = self._gcm.decrypt(self._iv(self._received, endian),
+                                          data, checksum, self._aad)
+            except CryptoError:
+                continue
+            self._settle(endian, "a message decrypted under it")
+            return plain
+        raise CryptoError("no dynamic IV layout authenticates this message; "
+                          "tried %s" % ", ".join(self._candidates))
+
+    def _settle(self, endian, why):
+        if self._candidates is None:
+            return
+        self._candidates = None
+        self.dynamic_endian = endian
+        log.info("dynamic IV layout settled on %s-endian: %s", endian, why)
 
 
 def _wrap(value):

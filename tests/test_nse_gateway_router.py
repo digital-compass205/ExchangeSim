@@ -39,10 +39,12 @@ import unittest
 from exchangesim.core.config import ConfigError
 from exchangesim.fix.message import Message
 from exchangesim.fix.render import REDACTED
+from exchangesim.nnf import crypto
 from exchangesim.nnf.codec import NnfCodec
 from exchangesim.tls import certs, context, rsa, x509
 from exchangesim.tls.transport import TlsTransport
 from exchangesim.venues.nse import dictionary as D
+from exchangesim.venues.nse import gateway_router
 from exchangesim.venues.nse import transactions as X
 
 from tests.nsesupport import (BOX_ONE, BROKER_ONE, BROKER_TWO, BoxClient,
@@ -308,6 +310,162 @@ class PlainRouterTest(unittest.TestCase):
         for name in redacted:
             if redacted[name]:
                 self.assertEqual(REDACTED, values[name])
+
+
+# ---------------------------------------------------------------------------
+# What the router issues, and where it points a member
+# ---------------------------------------------------------------------------
+
+class _FakeSocket(object):
+    """Just enough of a socket for :meth:`GatewayRouter._gateway_address`."""
+
+    def __init__(self, local):
+        self._local = local
+
+    def getsockname(self):
+        return self._local
+
+
+class _FakeConnection(object):
+
+    def __init__(self, local):
+        self.sock = _FakeSocket(local)
+
+
+class IssuedSecretsTest(unittest.TestCase):
+    """The cryptographic material, and the two readings of its dynamic IV.
+
+    A real client failed to decrypt the very first message the exchange sent
+    after box sign-on, and the cause was here rather than in GCM: the IV a
+    member hands OpenSSL is the memory of a C struct holding a ``long long``
+    (CM 6.6 p.256, F&O 9.50 p.315), so its dynamic half is laid out the host's
+    way and not the wire's. Both ends of a simulator get that wrong together
+    and round-trip perfectly, which is why nothing here caught it -- so these
+    tests build the two halves *separately*, the way the wire does.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness(gr_config(tls="none"))
+        self.addCleanup(self.harness.close)
+        self.router = self.harness.venue.router
+
+    def _client(self):
+        client = GrBlockingClient(self.router.address,
+                                  self.harness.venue.layouts)
+        self.addCleanup(client.close)
+        return client
+
+    def _secrets(self, **router):
+        return gateway_router.issue(BOX_ONE, "new", **router)
+
+    def test_the_dynamic_half_of_the_iv_is_issued_as_zero(self):
+        # Not laziness: at zero, a member that byte-swaps the Gateway Router's
+        # LONG LONG out of the response and a member that copies it straight
+        # into the IV struct hold the same number, so one whole reading of the
+        # document stops being able to disagree. The static half is still
+        # random, and the key is fresh per connection, which is what GCM
+        # actually requires.
+        secrets = self._secrets()
+        self.assertEqual(b"\x00" * 8, secrets.iv[8:])
+        self.assertNotEqual(b"\x00" * 8, secrets.iv[:8])
+
+        client = self._client()
+        client.request(BOX_ONE, BROKER_ONE)
+        pump(self.harness.reactor)
+        self.assertEqual("0", client.receive()[0].get(D.DYNAMIC_IV))
+
+    def test_the_exchange_finds_the_layout_a_member_actually_uses(self):
+        for endian in ("little", "big"):
+            secrets = self._secrets(dynamic_endian="auto")
+            member = crypto.NewCipher(secrets.key, secrets.iv,
+                                      secrets.additional_key, client=True,
+                                      dynamic_endian=endian)
+            exchange = secrets.exchange_cipher()
+
+            sealed, tag = member.seal(b"BOX_SIGN_ON_REQUEST_IN")
+            self.assertEqual(b"BOX_SIGN_ON_REQUEST_IN",
+                             exchange.open(sealed, tag))
+            self.assertEqual(endian, exchange.dynamic_endian)
+
+            # The direction that actually failed against the real client: the
+            # answer the exchange sends back must decrypt at the member.
+            sealed, tag = exchange.seal(b"BOX_SIGN_ON_REQUEST_OUT")
+            self.assertEqual(b"BOX_SIGN_ON_REQUEST_OUT",
+                             member.open(sealed, tag))
+
+    def test_a_pinned_layout_refuses_the_other_reading(self):
+        # What "auto" is protecting against, and what a member sees without it.
+        secrets = self._secrets(dynamic_endian="little")
+        member = crypto.NewCipher(secrets.key, secrets.iv,
+                                  secrets.additional_key, client=True,
+                                  dynamic_endian="big")
+        sealed, tag = member.seal(b"BOX_SIGN_ON_REQUEST_IN")
+        self.assertRaises(crypto.CryptoError,
+                          secrets.exchange_cipher().open, sealed, tag)
+
+    def test_the_member_half_cannot_probe_and_takes_the_default(self):
+        secrets = self._secrets(dynamic_endian="auto")
+        self.assertEqual("little", secrets.member_endian)
+        self.assertEqual("little", secrets.member_cipher().dynamic_endian)
+
+    def test_the_layout_in_force_is_reported_without_the_secrets(self):
+        described = self._secrets(dynamic_endian="big").describe()
+        self.assertEqual("big", described["dynamic_iv"])
+        self.assertEqual([], [text for text in _strings_in(described)
+                              if text in (str(self._secrets().key),)])
+
+    def test_an_unknown_dynamic_iv_setting_is_refused_at_startup(self):
+        self.assertRaises(ConfigError, VenueHarness,
+                          gr_config(tls="none", dynamic_iv="middle"))
+
+    def test_an_advertise_host_too_long_for_the_field_is_refused(self):
+        self.assertRaises(ConfigError, VenueHarness,
+                          gr_config(tls="none",
+                                    advertise_host="192.168.100.1000"))
+
+
+class GatewayAddressTest(unittest.TestCase):
+    """Which address a member is told to bring its encryption to.
+
+    ``IPAddress`` in the GR response is the member's *only* statement of where
+    the trading gateway is. A simulator bound to one interface and reached on
+    another answered with the bound address, which is the same
+    connection-refused the member had already hit on the router itself, one
+    step further in.
+    """
+
+    def _router(self, bound, **router):
+        harness = VenueHarness(gr_config(tls="none", **router))
+        self.addCleanup(harness.close)
+        router_ = harness.venue.router
+        router_._gateway = bound
+        return router_
+
+    def test_a_gateway_bound_to_one_interface_names_it(self):
+        router = self._router(("10.0.0.7", 9021))
+        self.assertEqual(("10.0.0.7", 9021),
+                         router._gateway_address(_FakeConnection(("10.0.0.9",
+                                                                  40001))))
+
+    def test_a_gateway_bound_to_every_interface_names_the_one_used(self):
+        router = self._router(("0.0.0.0", 9021))
+        self.assertEqual(("192.168.73.36", 9021),
+                         router._gateway_address(
+                             _FakeConnection(("192.168.73.36", 40001))))
+
+    def test_advertise_host_overrides_both(self):
+        router = self._router(("0.0.0.0", 9021), advertise_host="203.0.113.9")
+        self.assertEqual(("203.0.113.9", 9021),
+                         router._gateway_address(
+                             _FakeConnection(("192.168.73.36", 40001))))
+
+    def test_a_socket_that_cannot_answer_leaves_the_bound_address(self):
+        router = self._router(("0.0.0.0", 9021))
+
+        class _Broken(object):
+            sock = None
+
+        self.assertEqual(("0.0.0.0", 9021), router._gateway_address(_Broken()))
 
 
 # ---------------------------------------------------------------------------

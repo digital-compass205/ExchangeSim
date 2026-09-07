@@ -296,18 +296,27 @@ ASSUMPTIONS = [
     "member's client must be pointed at the generated file instead of a "
     "real one.",
 
-    "The dynamic half of the cryptographic IV is written big-endian. The "
-    "specification gives it as a C 'long long' inside a struct and does not "
-    "say how it is laid out once incremented; big-endian matches every other "
-    "multi-byte value in the protocol. NewCipher(dynamic_big_endian=False) is "
-    "the other reading.",
+    "The dynamic half of the cryptographic IV is laid out little-endian. It "
+    "is the one value in this protocol that does not follow the wire's "
+    "big-endian convention, because it never reaches the wire: the "
+    "pseudocode (p.256) hands the cipher the address of a C struct -- 'char "
+    "caStaticIv[8]; long long lDynamicIv;' -- so those eight bytes are laid "
+    "out the member's host way. What is left open is whether a member "
+    "byte-swaps the Gateway Router's LONG LONG out of the response before "
+    "storing it, as every other numeric field in this protocol requires. So "
+    "the exchange issues that field as zero, the one value at which both "
+    "readings coincide, and 'gateway_router.dynamic_iv' defaults to 'auto': "
+    "the layout is settled by whichever reading authenticates the first "
+    "message a box sends and pinned for the rest of the connection. Set it "
+    "to 'little' or 'big' to refuse the other outright.",
 
-    "The counter in that IV rises for member-to-exchange traffic and falls for "
-    "exchange-to-member traffic. The document states only the member's rule "
-    "-- increment before encryption, decrement before decryption -- which "
-    "cannot work if both ends apply it to the same copy. Two sequences walking "
-    "away from one origin is the only reading that both matches the text and "
-    "keeps GCM's requirement that an IV never repeat under a key.",
+    "The counter in that IV rises for member-to-exchange traffic and falls "
+    "for exchange-to-member traffic. The document gives the member two "
+    "separate copies and states only the member's rule -- increment before "
+    "encryption, decrement before decryption -- leaving the exchange to "
+    "mirror it. Two sequences walking away from one origin is the only "
+    "reading that both matches the text and keeps GCM's requirement that an "
+    "IV never repeat under a key.",
 
     "The heartbeat drop-counter threshold is 10. The document says a member "
     "connection is dropped when the counter 'reaches the threshold value set "

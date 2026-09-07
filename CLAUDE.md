@@ -206,6 +206,16 @@ Six things here are load-bearing.
   decrement before decryption — which cannot work if both ends apply it to one
   copy. Two sequences walking away from one origin is the only reading that
   matches the text and keeps GCM's requirement that an IV never repeat.
+- **That counter is laid out little-endian, and it is the only value here
+  that is.** Both documents' pseudocode hands the cipher the *address* of a
+  C struct (`char caStaticIv[8]; long long lDynamicIv;`), so those bytes
+  follow the member's host rather than this protocol's big-endian wire.
+  Written big-endian it round-trips perfectly against another simulator and
+  fails against every real client — which is exactly what it did. Because
+  it is still open whether a member byte-swaps the field out of the GR
+  response first, the exchange issues it as **zero**, where both readings
+  coincide, and `gateway_router.dynamic_iv` defaults to `auto`: the layout
+  is settled by whichever reading authenticates a box's first message.
 
 `nnf/` knows nothing about a market segment: which tag is the User ID, which is
 the Box ID and which code is the heartbeat are all arguments. That is what

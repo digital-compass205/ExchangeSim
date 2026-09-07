@@ -924,12 +924,26 @@ And three things that are built but not to the letter:
   the `DOUBLE` the wire carries, which is everything a client can rely on.
 
 The rest is in `venues/nse/rules.py:ASSUMPTIONS`, reported by
-`exsim --port 9103 call venue.assumptions`. The two that would bite hardest
-against a real client are the layout of the dynamic half of the cryptographic
-IV, which the document gives as a C `long long` without saying how it is laid
-out once incremented, and the direction that counter walks — see the
-`NewCipher` docstring, which explains why the document's own wording cannot be
-read literally.
+`exsim --port 9103 call venue.assumptions`. The one that bit hardest against a
+real client was the layout of the dynamic half of the cryptographic IV. Both
+documents give it as a C `long long` inside a struct whose *address* is handed
+to the cipher, so its bytes follow the member's host and not this protocol's
+big-endian wire: it is written **little-endian**, which is the reverse of every
+other multi-byte value here and is not a slip. What the documents still leave
+open is whether a member byte-swaps that field out of the Gateway Router
+response before storing it, so the exchange issues it as **zero** — the value
+at which both readings coincide — and `gateway_router.dynamic_iv` defaults to
+`"auto"`, settling the layout on whichever reading authenticates a box's first
+message and pinning it for the connection. `"little"` and `"big"` pin it up
+front instead. The direction the counter walks is in the same place; see the
+`NewCipher` docstring for why the document's wording cannot be read literally.
+
+`gateway_router.advertise_host` covers the other half of reaching a simulator
+from another machine. The `IPAddress` in a GR response is a member's only
+statement of where the trading gateway is, and a gateway bound to `0.0.0.0`
+cannot answer with its own bound address — so the address the member reached
+the router on is used instead, and `advertise_host` overrides both for a NAT or
+a port forward.
 
 The spread table and both price rules were checked against the published Rules
 of the Exchange rather than assumed; `exsim assumptions` lists what remains.

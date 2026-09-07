@@ -332,6 +332,26 @@ methodologies `gateway_router.encryption` names. Set
 you are bringing a client up: the box then runs in clear, which the protocol
 also defines.
 
+Under the `"new"` methodology the dynamic half of the IV is a counter, and it
+is the **one value in this protocol that is not big-endian**: both
+specifications hand the cipher the address of a C struct holding a `long
+long`, so the member's host byte order is what reaches the cipher. The
+exchange issues that counter as **zero**, which is the value at which a member
+that byte-swaps the field out of the GR response and a member that copies it
+straight into the struct agree, and `gateway_router.dynamic_iv` defaults to
+`"auto"`: the simulator settles the layout on whichever reading authenticates
+the first message a box sends — GCM's tag makes a wrong IV say so — logs
+which it chose, and holds it for the connection. `"little"` (the default
+reading) and `"big"` pin it up front and refuse the other.
+
+To reach the simulator from another machine, bind `nnf.host` and
+`gateway_router.host` to `0.0.0.0` rather than `127.0.0.1`. The GR response's
+`IPAddress` is a member's **only** statement of where the trading gateway is,
+and `0.0.0.0` is not somewhere anyone can connect, so a gateway bound to every
+interface answers with the address that member reached the router on.
+`gateway_router.advertise_host` overrides that for a NAT or a port forward; it
+must fit the 16-byte `IPAddress` field, so 15 characters at most.
+
 `gateway_router.tls` takes `"1.3"` (the default, and what the specification
 asks for), `"1.2"` or `"none"`. Asking for 1.3 on an interpreter whose OpenSSL
 cannot do it is **refused at start-up** rather than quietly downgraded, so

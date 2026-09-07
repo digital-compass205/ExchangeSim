@@ -233,12 +233,21 @@ class NewCipherTest(unittest.TestCase):
     AAD = b"\x44" * 12
 
     def iv(self, dynamic=1000):
-        return b"\x55" * 8 + struct.pack(">q", dynamic)
+        # Little-endian, because that is the layout of the C struct the
+        # specification's pseudocode hands to OpenSSL -- see NewCipher.
+        return b"\x55" * 8 + struct.pack("<q", dynamic)
 
-    def pair(self):
+    def pair(self, **kwargs):
         """A member and the exchange, both holding what the Gateway Router issued."""
-        return (NewCipher(self.KEY, self.iv(), self.AAD, client=True),
-                NewCipher(self.KEY, self.iv(), self.AAD))
+        return (NewCipher(self.KEY, self.iv(), self.AAD, client=True, **kwargs),
+                NewCipher(self.KEY, self.iv(), self.AAD, **kwargs))
+
+    @staticmethod
+    def counter(cipher, sending=True):
+        """The counter value the last message in that direction was sealed at."""
+        steps = cipher._sent if sending else cipher._received
+        fmt = cipher._FORMATS[cipher.dynamic_endian]
+        return struct.unpack(fmt, cipher._dynamic)[0] + steps
 
     def test_a_message_round_trips_between_two_endpoints(self):
         sender, receiver = self.pair()
@@ -271,14 +280,14 @@ class NewCipherTest(unittest.TestCase):
         member, exchange = self.pair()
 
         sealed, tag = member.seal(b"to the exchange")
-        self.assertEqual(member._sending, 1001)
+        self.assertEqual(self.counter(member), 1001)
         self.assertEqual(exchange.open(sealed, tag), b"to the exchange")
-        self.assertEqual(exchange._receiving, 1001)
+        self.assertEqual(self.counter(exchange, sending=False), 1001)
 
         sealed, tag = exchange.seal(b"to the member")
-        self.assertEqual(exchange._sending, 999)
+        self.assertEqual(self.counter(exchange), 999)
         self.assertEqual(member.open(sealed, tag), b"to the member")
-        self.assertEqual(member._receiving, 999)
+        self.assertEqual(self.counter(member, sending=False), 999)
 
     def test_both_directions_travel_on_one_connection(self):
         member, exchange = self.pair()
@@ -299,8 +308,8 @@ class NewCipherTest(unittest.TestCase):
         for _ in range(4):
             member.seal(b"up")
             exchange.seal(b"down")
-            seen.add(member._iv(member._sending))
-            seen.add(exchange._iv(exchange._sending))
+            seen.add(member._iv(member._sent, member.dynamic_endian))
+            seen.add(exchange._iv(exchange._sent, exchange.dynamic_endian))
         self.assertEqual(len(seen), 8)
 
     def test_a_message_out_of_step_does_not_authenticate(self):
@@ -320,18 +329,55 @@ class NewCipherTest(unittest.TestCase):
         _, receiver = self.pair()
         self.assertRaises(CryptoError, receiver.open, b"data", None)
 
-    def test_the_dynamic_half_can_be_read_little_endian(self):
-        # ASSUMPTION: the document does not say how the incremented counter is
-        # laid out. Big-endian matches the rest of the protocol and is the
-        # default; this is the other reading, kept reachable rather than
-        # rewritten under a client.
-        little = NewCipher(self.KEY, b"\x55" * 8 + struct.pack("<q", 5),
-                           self.AAD, dynamic_big_endian=False)
-        self.assertEqual(little._iv(6), b"\x55" * 8 + struct.pack("<q", 6))
+    def test_the_dynamic_half_is_laid_out_little_endian(self):
+        # The IV is the memory of a C struct holding a `long long`, not a wire
+        # field, so it follows the host rather than the protocol. Reading it
+        # big-endian round-trips perfectly against itself and fails against
+        # every real client, which is exactly what it did.
+        cipher = NewCipher(self.KEY, b"\x55" * 8 + struct.pack("<q", 5), self.AAD)
+        self.assertEqual(cipher.dynamic_endian, "little")
+        self.assertEqual(cipher._iv(1, cipher.dynamic_endian),
+                         b"\x55" * 8 + struct.pack("<q", 6))
+
+    def test_a_client_that_normalises_the_counter_can_be_served_big_endian(self):
+        cipher = NewCipher(self.KEY, b"\x55" * 8 + struct.pack(">q", 5), self.AAD,
+                           dynamic_endian="big")
+        self.assertEqual(cipher._iv(1, cipher.dynamic_endian),
+                         b"\x55" * 8 + struct.pack(">q", 6))
+
+    def test_auto_settles_on_the_layout_the_member_actually_uses(self):
+        # Both readings are live -- the pseudocode copies the Gateway Router's
+        # field straight into the struct, while every other numeric field in
+        # this protocol has to be byte-swapped out of it first. The tag makes a
+        # wrong IV say so, so the exchange can simply try both and keep the one
+        # that authenticates.
+        for endian in ("little", "big"):
+            member = NewCipher(self.KEY, self.iv(), self.AAD, client=True,
+                               dynamic_endian=endian)
+            exchange = NewCipher(self.KEY, self.iv(), self.AAD,
+                                 dynamic_endian="auto")
+            sealed, tag = member.seal(b"box sign on")
+            self.assertEqual(exchange.open(sealed, tag), b"box sign on")
+            self.assertEqual(exchange.dynamic_endian, endian)
+
+            # And it stays settled, in both directions.
+            sealed, tag = exchange.seal(b"box sign on response")
+            self.assertEqual(member.open(sealed, tag), b"box sign on response")
+
+    def test_auto_falls_back_to_the_default_if_the_exchange_speaks_first(self):
+        exchange = NewCipher(self.KEY, self.iv(), self.AAD,
+                             dynamic_endian="auto")
+        exchange.seal(b"nothing has been decrypted yet")
+        self.assertEqual(exchange.dynamic_endian, "little")
+
+    def test_auto_still_refuses_a_message_no_layout_authenticates(self):
+        exchange = NewCipher(self.KEY, self.iv(), self.AAD,
+                             dynamic_endian="auto")
+        self.assertRaises(CryptoError, exchange.open, b"rubbish", b"\x00" * 16)
 
     def test_the_counter_wraps_rather_than_overflowing(self):
-        highest = NewCipher(self.KEY, b"\x55" * 8 + struct.pack(">q", 2 ** 63 - 1),
-                            self.AAD)
+        highest = NewCipher(self.KEY, b"\x55" * 8 + struct.pack("<q", 2 ** 63 - 1),
+                            self.AAD, client=True)
         sealed, tag = highest.seal(b"payload")
         self.assertEqual(len(sealed), len(b"payload"))
         self.assertEqual(len(tag), 16)
@@ -339,6 +385,10 @@ class NewCipherTest(unittest.TestCase):
     def test_the_key_iv_and_additional_key_widths_are_checked(self):
         self.assertRaises(ValueError, NewCipher, self.KEY, b"\x00" * 12, self.AAD)
         self.assertRaises(ValueError, NewCipher, self.KEY, self.iv(), b"\x00" * 8)
+
+    def test_an_unknown_dynamic_iv_layout_is_refused(self):
+        self.assertRaises(ValueError, NewCipher, self.KEY, self.iv(), self.AAD,
+                          False, "middle")
 
 
 if __name__ == "__main__":
