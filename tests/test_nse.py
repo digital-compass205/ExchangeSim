@@ -470,3 +470,77 @@ class AuditTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+UNKNOWN_USER = 49999
+
+
+class HeaderUserIdTest(unittest.TestCase):
+    """Every message a user receives names that user in the message header.
+
+    "TraderId -- This field should contain the user ID" is said of the
+    MESSAGE_HEADER once (CM 6.6) and holds for every structure carrying one,
+    in both directions. A real gateway reads the header to find the trader a
+    response belongs to and indexes a container with it, so a response naming
+    its user only inside the structure's *body* hands that gateway user 0 --
+    which took a client down at the Futures & Options venue, where four
+    handlers had each forgotten separately.
+
+    Capital Market's handlers happened to set it; this test is here so they go
+    on doing so, and because the two venues are independent transcriptions
+    that have already drifted once. The stamp itself lives in
+    ``NnfSession.send``, which is the one place that knows both the tag and
+    the user.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness()
+        self.addCleanup(self.harness.close)
+
+    def names(self, client, user_id):
+        """Assert every pending message names ``user_id``; return their codes."""
+        messages = client.received()
+        self.assertTrue(messages, "nothing was answered")
+        for message in messages:
+            self.assertEqual(
+                str(user_id), message.get(D.USER_ID),
+                "transaction %s left the header's user id at %r"
+                % (message.msg_type, message.get(D.USER_ID)))
+        return set(int(message.msg_type) for message in messages)
+
+    def test_every_reply_to_a_signed_on_user_names_them(self):
+        client = self.harness.client(users=())
+        client.sign_on(USER_ONE)
+        seen = self.names(client, USER_ONE)
+
+        client.new_order(USER_ONE, quantity=100, price="1500.00")
+        seen |= self.names(client, USER_ONE)
+
+        client.modify(USER_ONE, "1", quantity=200)
+        seen |= self.names(client, USER_ONE)
+
+        client.cancel(USER_ONE, "1")
+        seen |= self.names(client, USER_ONE)
+
+        client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        seen |= self.names(client, USER_ONE)
+
+        client.send(X.DOWNLOAD_REQUEST, user_id=USER_ONE)
+        seen |= self.names(client, USER_ONE)
+
+        client.send(X.SIGN_OFF_REQUEST_IN, user_id=USER_ONE)
+        seen |= self.names(client, USER_ONE)
+
+        self.assertEqual(
+            {X.SIGN_ON_REQUEST_OUT, X.SYSTEM_INFORMATION_OUT,
+             X.ORDER_CONFIRMATION, X.ORDER_MOD_CONFIRMATION,
+             X.ORDER_CANCEL_CONFIRMATION, X.ERROR_RESPONSE_OUT,
+             X.SIGN_OFF_REQUEST_OUT},
+            seen)
+
+    def test_a_refused_sign_on_names_the_user_that_was_asked_for(self):
+        client = self.harness.client(users=())
+        client.sign_on(UNKNOWN_USER)
+        refusal = client.last()
+        self.assertEqual(X.SIGN_ON_REQUEST_OUT, int(refusal.msg_type))
+        self.assertEqual(str(UNKNOWN_USER), refusal.get(D.USER_ID))

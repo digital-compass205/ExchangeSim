@@ -193,6 +193,16 @@ Six things here are load-bearing.
   answers with users, because that is what an order's owner and a report's
   recipient mean; `manager.resolve_inbound` answers with boxes, because that is
   what a connection is.
+- **A message names its user in the 40-byte header, outbound as well as in.**
+  "TraderId — This field should contain the user ID" is said of the header
+  once and holds for every structure carrying one. A real gateway reads it to
+  find the trader a response belongs to and *indexes a container with it*, so a
+  reply that names its user only in the structure's body hands that gateway
+  user 0 — which crashed one on the sign-on response. `NnfSession.send` stamps
+  `manager.user_id_tag` when a handler has not, because that is the one place
+  knowing both the tag and the user: it is the same field `BoxConnection` reads
+  to route an *inbound* message to a session, answered in. Doing it per handler
+  is what let F&O ship four message types that forgot.
 - **Reports produced while a user is disconnected are dropped, not queued.**
   That inverts the FIX invariant below, and it must: there is no resend to
   deliver them. The client asks for a download instead.

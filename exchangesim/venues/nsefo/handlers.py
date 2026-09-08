@@ -144,6 +144,10 @@ class NsefoApplication(Application):
         message.set(D.ERROR_CODE, str(error_code))
         message.set(D.BOX_ID, str(box.box_id))
         if user_id is not None:
+            # No session exists to stamp the header for a user who never
+            # signed on, so name them here -- the client still looks the
+            # refusal up by the header's user id.
+            message.set(D.USER_ID, str(user_id))
             message.set(D.SIGNON_USER_ID, str(user_id))
         message.set(D.LOG_TIME, str(self._nse_seconds()))
         box.send(message)

@@ -422,3 +422,103 @@ class RefusalTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+UNKNOWN_USER = 59999
+
+
+class HeaderUserIdTest(unittest.TestCase):
+    """Every message a user receives names that user in the message header.
+
+    "TraderId -- This field should contain the user ID" is said of the
+    MESSAGE_HEADER once (F&O 9.50 p.22) and holds for every structure that
+    carries one, in both directions. It is not decoration: a real gateway reads
+    the header to find the trader a response belongs to and indexes a container
+    with the value, so a response that names its user only inside the
+    structure's *body* hands that gateway user 0 -- which is what it did, going
+    out of bounds on a sign-on response and taking the client down.
+
+    The mistake is per-handler and silent, and four of them made it separately
+    at this venue, so this drives every outbound type a signed-on user can
+    provoke and checks them together rather than asserting one reply. The stamp
+    itself now lives in ``NnfSession.send``, which is the one place that knows
+    both the tag and the user.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness()
+        self.addCleanup(self.harness.close)
+
+    def names(self, client, user_id):
+        """Assert every pending message names ``user_id``; return their codes."""
+        messages = client.received()
+        self.assertTrue(messages, "nothing was answered")
+        for message in messages:
+            self.assertEqual(
+                str(user_id), message.get(D.USER_ID),
+                "%s left the header's user id at %r"
+                % (rules.describe_transaction(int(message.msg_type)),
+                    message.get(D.USER_ID)))
+        return set(int(message.msg_type) for message in messages)
+
+    def test_every_reply_to_a_signed_on_user_names_them(self):
+        client = self.harness.client(users=())
+        client.sign_on(USER_ONE)
+        seen = self.names(client, USER_ONE)
+
+        client.new_order(USER_ONE, contract=FUTURE, quantity=25,
+                         price="25400.00")
+        seen |= self.names(client, USER_ONE)
+
+        client.modify(USER_ONE, "1", quantity=50)
+        seen |= self.names(client, USER_ONE)
+
+        client.cancel(USER_ONE, "1")
+        seen |= self.names(client, USER_ONE)
+
+        # A refusal, which is the erroring form of the same transaction.
+        client.new_order(USER_ONE, contract=FUTURE, price="25400.00",
+                         extra={D.BOOK_TYPE: D.BookType.SPECIAL_TERMS})
+        seen |= self.names(client, USER_ONE)
+
+        client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        seen |= self.names(client, USER_ONE)
+
+        client.send(X.DOWNLOAD_REQUEST, user_id=USER_ONE)
+        seen |= self.names(client, USER_ONE)
+
+        client.send(X.SIGN_OFF_REQUEST_IN, user_id=USER_ONE)
+        seen |= self.names(client, USER_ONE)
+
+        self.assertEqual(
+            {X.SIGN_ON_REQUEST_OUT, X.SYSTEM_INFORMATION_OUT,
+             X.ORDER_CONFIRMATION, X.ORDER_MOD_CONFIRMATION,
+             X.ORDER_CANCEL_CONFIRMATION, X.ORDER_ERROR,
+             X.ERROR_RESPONSE_OUT, X.SIGN_OFF_REQUEST_OUT},
+            seen)
+
+    def test_a_trade_report_names_the_side_it_is_sent_to(self):
+        # The resting side never sent the message that caused this, so its
+        # report is routed by the order's owner -- and must be addressed to
+        # that owner, not to whoever triggered the match.
+        resting = self.harness.client(box_id=BOX_ONE, users=(USER_ONE,))
+        aggressor = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+        resting.new_order(USER_ONE, side=D.BuySell.SELL, contract=FUTURE,
+                          quantity=25, price="25400.00")
+        resting.clear()
+
+        aggressor.new_order(USER_THREE, side=D.BuySell.BUY, contract=FUTURE,
+                            quantity=25, price="25400.00")
+
+        self.assertIn(X.TRADE_CONFIRMATION, self.names(resting, USER_ONE))
+        self.assertIn(X.TRADE_CONFIRMATION, self.names(aggressor, USER_THREE))
+
+    def test_a_refused_sign_on_names_the_user_that_was_asked_for(self):
+        # There is no session to stamp the header here: the refusal is about a
+        # user who never signed on. The client still looks it up by user id.
+        client = self.harness.client(users=())
+        client.sign_on(UNKNOWN_USER)
+        refusal = client.last()
+        self.assertEqual(X.SIGN_ON_REQUEST_OUT, int(refusal.msg_type))
+        self.assertEqual("16042", refusal.get(D.ERROR_CODE))
+        self.assertEqual(str(UNKNOWN_USER), refusal.get(D.USER_ID))

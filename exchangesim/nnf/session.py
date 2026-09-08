@@ -188,7 +188,7 @@ class NnfSession(object):
     # -- traffic -----------------------------------------------------------
 
     def send(self, message):
-        """Send one message to this user.
+        """Send one message to this user, naming them in the header.
 
         With the box gone the message is recorded as undelivered and dropped --
         see the module docstring. There is nothing to queue it for, and the
@@ -196,12 +196,37 @@ class NnfSession(object):
         """
         if self.box is None:
             return False
+        self.name_recipient(message)
         if not self.box.connected:
             self.box.record(DIRECTION_OUT, message, None,
                             error="not delivered: the box is disconnected",
                             session=self.target_comp_id)
             return False
         return self.box.send(message, session=self)
+
+    def name_recipient(self, message):
+        """Put this user's id in the header field the protocol carries it in.
+
+        "This field should contain the user ID" is said of the header once and
+        applies to every message with a header, in both directions -- so a
+        response that names its user only inside the structure's body leaves
+        the header at zero, and a client reading the header to find the trader
+        a response belongs to is handed user 0. A real gateway crashed on
+        exactly that, looking up trader 0 in a container that had no such
+        entry.
+
+        It is stamped here rather than in each venue's handlers because this is
+        the one place that knows both the tag and the user: ``user_id_tag`` is
+        already what ``BoxConnection`` reads to route an *inbound* message to a
+        session, so answering in the same field is the same fact read
+        backwards. Doing it per handler is what let a venue ship four message
+        types that forgot. A handler that has set the field itself keeps its
+        value -- an error naming a user who never signed on is built before
+        there is a session to send it through.
+        """
+        tag = self.box.manager.user_id_tag if self.box is not None else None
+        if tag is not None and message.get(tag) is None:
+            message.set(tag, str(self.user_id))
 
     def disconnect(self, reason="disconnected"):
         """Sign this user off. The box, and its other users, stay up."""
