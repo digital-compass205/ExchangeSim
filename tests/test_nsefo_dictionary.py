@@ -33,6 +33,11 @@ from exchangesim.venues.nsefo import transactions as X
 #: ``docs/specs/NSE_FO_TRANSCRIPTION.md`` §1, not imported from the layouts,
 #: so that this is a second statement of the same fact and not a tautology.
 PUBLISHED_SIZES = {
+    # The download's answers. Header and trailer are a bare header; the
+    # record is the one structure here with no published length, which is
+    # what RECORD_CODES below is about.
+    X.HEADER_RECORD: 40,
+    X.TRAILER_RECORD: 40,
     X.SYSTEM_INFORMATION_IN: 44,
     X.SYSTEM_INFORMATION_OUT: 106,
     X.BOARD_LOT_IN: 316,
@@ -103,8 +108,17 @@ class StructureSizeTest(unittest.TestCase):
             self.assertIsNone(layout.check(), layout.name)
 
     def test_every_published_code_has_a_structure(self):
-        self.assertEqual(sorted(PUBLISHED_SIZES),
+        self.assertEqual(sorted(list(PUBLISHED_SIZES) + [X.MESSAGE_RECORD]),
                          sorted(int(l.msg_type) for l in self.layouts.layouts))
+
+    def test_the_download_record_is_the_one_structure_without_a_length(self):
+        # Every other structure in this protocol is fixed width and the size
+        # table above is checked against it. A MESSAGE_RECORD carries another
+        # whole message, so it has no length to check.
+        record = self.layouts.layout(X.MESSAGE_RECORD)
+        self.assertIsNotNone(record)
+        self.assertIsNone(record.check())
+        self.assertEqual(40, record.header.size)
 
     def test_the_header_is_forty_bytes_and_identical_to_capital_markets(self):
         # pragma pack 2, and the single most quotable consequence of it --

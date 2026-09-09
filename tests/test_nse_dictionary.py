@@ -34,6 +34,11 @@ from exchangesim.venues.nse import transactions as X
 #: Written out here rather than read from the layouts, so that this is a second
 #: statement of the same fact and not a tautology.
 PUBLISHED_SIZES = {
+    # The download's answers. Header and trailer are a bare header; the
+    # record is the one structure here with no published length, which is
+    # what RECORD_CODES below is about.
+    X.HEADER_RECORD: 40,
+    X.TRAILER_RECORD: 40,
     X.SYSTEM_INFORMATION_IN: 40,
     X.SYSTEM_INFORMATION_OUT: 94,      # 94 per Chapter 3; the appendix says 90
     X.BOARD_LOT_IN: 290,
@@ -66,7 +71,10 @@ PUBLISHED_SIZES = {
 #: nothing: the message download is deliberately unbuilt because a
 #: MESSAGE_RECORD is 80 to 512 bytes and every structure here is fixed width.
 #: See ``rules.NOT_IMPLEMENTED``.
-NOT_STRUCTURED = (X.HEADER_RECORD, X.MESSAGE_RECORD, X.TRAILER_RECORD)
+#: The one structure with no published length: a MESSAGE_RECORD is a header
+#: plus whatever message it recovered, 80 to 512 bytes. Excluded from the size
+#: table above rather than given a number, because there is no number.
+RECORD_CODES = (X.MESSAGE_RECORD,)
 
 REFERENCE = "exchangesim/venues/nse/reference/%s.csv"
 
@@ -91,12 +99,19 @@ class StructureSizeTest(unittest.TestCase):
             self.assertIsNone(layout.check(), layout.name)
 
     def test_every_published_code_has_a_structure(self):
-        self.assertEqual(sorted(PUBLISHED_SIZES),
+        self.assertEqual(sorted(list(PUBLISHED_SIZES) + list(RECORD_CODES)),
                          sorted(int(l.msg_type) for l in self.layouts.layouts))
 
-    def test_the_download_response_records_have_none(self):
-        for code in NOT_STRUCTURED:
-            self.assertIsNone(self.layouts.layout(code), X.NAMES[code])
+    def test_the_download_record_is_the_one_structure_without_a_length(self):
+        # Every other structure in this protocol is fixed width and the size
+        # table above is checked against it. A MESSAGE_RECORD carries another
+        # whole message, so it has no length to check -- and its `check()`
+        # must say so rather than measuring a header and calling it the body.
+        for code in RECORD_CODES:
+            layout = self.layouts.layout(code)
+            self.assertIsNotNone(layout, X.NAMES[code])
+            self.assertIsNone(layout.check(), layout.name)
+            self.assertEqual(40, layout.header.size)
 
     def test_the_header_is_forty_bytes_with_the_long_long_at_fourteen(self):
         # pragma pack 2, and the single most quotable consequence of it.

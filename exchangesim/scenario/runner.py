@@ -680,10 +680,23 @@ def _describe(step):
     return "?"
 
 
+#: Anything outside this is escaped before a failure is printed. A field can
+#: legitimately hold raw bytes -- a MESSAGE_RECORD carries a whole encoded
+#: message in one -- and a console that is not UTF-8 raises rather than
+#: printing them, which turned a readable step failure into a traceback from
+#: the reporting code on this project's own Japanese-locale Windows box.
+_PRINTABLE = frozenset(chr(code) for code in range(0x20, 0x7F))
+
+
+def _readable(text):
+    return "".join(char if char in _PRINTABLE else "\\x%02x" % ord(char)
+                   for char in text)
+
+
 def _summarise(messages):
     if not messages:
         return "(nothing)"
-    return "; ".join(message.to_string() for message in messages[:5])
+    return "; ".join(_readable(message.to_string()) for message in messages[:5])
 
 
 # -- entry point -------------------------------------------------------------

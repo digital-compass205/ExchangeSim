@@ -36,8 +36,13 @@ HEADER = L.HeaderLayout(40, (
     L.Field(D.USER_ID, "UserId", T.LONG, 8),
     L.Field(D.ERROR_CODE, "ErrorCode", T.SHORT, 12),
     L.Field(D.TIMESTAMP, "Timestamp", T.LONG_LONG, 14),
-    L.Field(D.TIMESTAMP1, "TimeStamp1", T.Char(8), 22),
-    L.Field(D.TIMESTAMP2, "TimeStamp2", T.Char(8), 30),
+    # Declared CHAR[8] in the table and numeric in its own description: "in
+    # TimeStamp1, current time is sent in jiffies from host end. This is 8
+    # bytes in host end", and TimeStamp2 carries a machine number in its
+    # eighth byte, which is the low byte of a big-endian LONG LONG. Read as
+    # text they would be cut at the first NUL of a perfectly ordinary value.
+    L.Field(D.TIMESTAMP1, "TimeStamp1", T.LONG_LONG, 22),
+    L.Field(D.TIMESTAMP2, "TimeStamp2", T.LONG_LONG, 30),
     L.Field(D.MESSAGE_LENGTH, "MessageLength", T.SHORT, 38),
 ))
 
@@ -326,5 +331,12 @@ def build_cm():
     # and every structure here is fixed width. See handlers._on_download_request.
     layouts.define(X.DOWNLOAD_REQUEST, "MESSAGE_DOWNLOAD", 48, (
         L.Field(D.DOWNLOAD_SEQUENCE, "SequenceNumber", T.DOUBLE, 40),))
+    # The download's three answers. Header and trailer are a bare header and
+    # nothing else; the record carries one recovered message whole, which is
+    # why it is the one structure here with no published length -- see
+    # nnf/layout.py:RecordLayout for the inner header it wraps.
+    layouts.define(X.HEADER_RECORD, "MESSAGE_HEADER", 40, ())
+    layouts.define(X.TRAILER_RECORD, "MESSAGE_HEADER", 40, ())
+    layouts.define_record(X.MESSAGE_RECORD, "MESSAGE_RECORD", D.DOWNLOAD_DATA)
 
     return layouts

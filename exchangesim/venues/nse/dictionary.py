@@ -194,9 +194,13 @@ SECURITY_AON = 9230
 SECURITY_MIN_FILL = 9231
 SECURITY_BOOKS_MERGED = 9232
 
-# The order and trade download.
+# The message download, the recovery this protocol has instead of a resend
+# request. DOWNLOAD_DATA is not a wire field of its own: it is the whole
+# recovered message, carried through this dialect as one opaque run of bytes
+# so that MESSAGE_RECORD's variable tail has somewhere to live.
 DOWNLOAD_SEQUENCE = 9300
 DOWNLOAD_COUNT = 9301
+DOWNLOAD_DATA = 9302
 
 
 # -- value domains -----------------------------------------------------------
@@ -312,8 +316,10 @@ def header_fields():
                  labels={str(code): name
                          for code, name in X.ERROR_CODES.items()}),
         _number(TIMESTAMP, "Timestamp"),
-        _text(TIMESTAMP1, "TimeStamp1", 8),
-        _text(TIMESTAMP2, "TimeStamp2", 8),
+        # Numbers, not text: jiffies since the epoch and a machine number.
+        # See the header in layouts.py.
+        _number(TIMESTAMP1, "TimeStamp1"),
+        _number(TIMESTAMP2, "TimeStamp2"),
         _number(MESSAGE_LENGTH, "MessageLength"),
     ]
 
@@ -454,6 +460,7 @@ def application_fields():
         _text(ERROR_MESSAGE, "ErrorMessage", 128),
         _number(DOWNLOAD_SEQUENCE, "DownloadSequence"),
         _number(DOWNLOAD_COUNT, "DownloadCount"),
+        _text(DOWNLOAD_DATA, "Data"),
 
         # -- ST_ORDER_FLAGS --------------------------------------------------
         _flag(FLAG_ATO, "ATO"),
@@ -589,6 +596,10 @@ def application_messages():
         # Defined so the request can be read and refused by name; the three
         # response records are not produced. See rules.NOT_IMPLEMENTED.
         _message(X.DOWNLOAD_REQUEST, "DOWNLOAD_REQUEST", (DOWNLOAD_SEQUENCE,)),
+        _message(X.HEADER_RECORD, "HEADER_RECORD", (), inbound=False),
+        _message(X.MESSAGE_RECORD, "MESSAGE_RECORD", (DOWNLOAD_DATA,),
+                 inbound=False),
+        _message(X.TRAILER_RECORD, "TRAILER_RECORD", (), inbound=False),
     ]
 
 

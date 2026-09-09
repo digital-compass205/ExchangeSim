@@ -361,6 +361,25 @@ sample code pins both the minimum and the maximum to 1.3. The generated key in
 `var/tls/` is a **simulator** key: it exists so a client can complete a
 handshake, and it should never be promoted anywhere.
 
+There is no resend. A report produced while a user was signed off is dropped
+rather than queued, and the client gets it back by asking: **`DOWNLOAD_REQUEST`
+(7000)** names a stream in the header's `AlphaChar` and a cursor in
+`SequenceNumber`, and the venue answers `HEADER_RECORD (7011)`, one
+`MESSAGE_RECORD (7021)` per message after that cursor, and `TRAILER_RECORD
+(7031)`. The cursor is the header's own **`TimeStamp1`** — jiffies, 1 second =
+65536 — so a client remembers the last stamp it saw and asks for everything
+after; zero means the whole trading day. `TimeStamp2` carries the stream, and
+`SYSTEM_INFORMATION_OUT`'s `AlphaChar` says how many streams to loop over (one
+here, `nnf.stream`). A stream this venue does not serve answers empty rather
+than refusing, so that loop terminates. `nnf.recovery_capacity` (500) bounds
+what one user can still recover.
+
+A record wraps the recovered message whole, its own header included, and that
+**inner header is the ordinary `MESSAGE_HEADER`** — not the
+`INNER_MESSAGE_HEADER` the document prescribes for download data. A recovered
+message is always the non-trimmed form. Both points come from a real client
+rather than the specification.
+
 A security is `Symbol` **and** `Series` — `INFY` + `EQ` — because neither names
 one alone, and everything the venue says back uses both. There is **no client
 order ID**: the `ORDER_CONFIRMATION (2073)` is where you learn the

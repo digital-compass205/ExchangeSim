@@ -210,11 +210,33 @@ SESSION_FAILURE_TO_ERROR_CODE = {
 TERMINAL_STATUSES = frozenset((OrderStatus.FILLED, OrderStatus.CANCELLED,
                                OrderStatus.REJECTED, OrderStatus.EXPIRED))
 
-#: The message download is refused outright (see ASSUMPTIONS/NOT_IMPLEMENTED),
-#: same reasoning as Capital Market, with this venue's own generic
-#: "function not available" code rather than CM's ``CANT_COMPLETE_YOUR_REQUEST``
-#: (not present in F&O's own table).
-DOWNLOAD_NOT_IMPLEMENTED = 16052      # ERR_FUNCTION_NOT_AVAILABLE
+#: What a download answers when the stream it names is not one this venue
+#: serves. Not an error on the wire: the member is told the stream is empty and
+#: moves on to the next, which is what its loop is for.
+DOWNLOAD_UNKNOWN_STREAM = 0
+
+#: The download's own three answers, which are the one thing a download must
+#: not replay. Storing them would make a second download return the first one
+#: wrapped in a third, and a third return that -- growing without bound and
+#: telling the client nothing.
+NOT_RECOVERABLE = frozenset(str(code) for code in
+                            (X.HEADER_RECORD, X.MESSAGE_RECORD,
+                             X.TRAILER_RECORD))
+
+
+def is_recoverable(msg_type):
+    """Whether a message sent to a user can come back in a download.
+
+    ASSUMPTION: everything else can. Chapter 5 lists what a download returns --
+    logon and logoff responses, interactive messages from NSE-Control, order
+    and trade responses, trade confirmations, and a set of broadcasts -- but it
+    reads as illustrative rather than closed, and every message this venue
+    sends a user falls inside it. Excluding by that list instead would mean a
+    message type added later is silently unrecoverable; excluding only the
+    download's own codes means the reverse, which is visible.
+    """
+    return str(msg_type) not in NOT_RECOVERABLE
+
 
 
 def error_for(reason, table, default=INVALID_ORDER_PARAM):
@@ -358,6 +380,18 @@ def default_limits(max_order_value=None, max_quantity=None):
 
 
 ASSUMPTIONS = [
+    "The message download replays every message this venue sent a user, "
+    "bounded by 'nnf.recovery_capacity' (500) rather than by the trading "
+    "day, and keyed on the header's TimeStamp1 in jiffies from 1980 -- the "
+    "document gives that field's unit and never its origin. A client echoes "
+    "the value back rather than reading it, so the choice is invisible to "
+    "it; it matches the sibling nanosecond Timestamp field so one capture "
+    "does not hold two epochs. Two further points came from a real client "
+    "rather than the document: a record's inner header is the ordinary "
+    "MESSAGE_HEADER, not the INNER_MESSAGE_HEADER Chapter 2 prescribes for "
+    "download data, and a recovered message is always the non-trimmed "
+    "form.",
+
     "The dynamic half of the cryptographic IV is laid out little-endian. It "
     "is the one value in this protocol that does not follow the wire's "
     "big-endian convention, because it never reaches the wire: the "
@@ -475,11 +509,6 @@ NOT_IMPLEMENTED = [
     "client this simulator serves -- see docs/specs/NSE_FO_TRANSCRIPTION.md "
     "§7 for why none of these has a client-facing refusal beyond the general "
     "catch-all.",
-
-    "The order and trade download (7000/7011/7021/7031), refused with "
-    "ERR_FUNCTION_NOT_AVAILABLE (16052) for the same reason as Capital "
-    "Market: every structure here is fixed width, and a MESSAGE_RECORD is "
-    "not.",
 
     "The UDP multicast broadcast feed: LZO-compressed, and LZO cannot be "
     "written under this project's standard-library-only constraint. Market "

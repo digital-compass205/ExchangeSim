@@ -82,9 +82,17 @@
     {"send": "one", "fields": {"35": "2000", "9004": "0", "9003": "40521", "55": "NOSUCH", "9100": "EQ", "9110": "1", "54": "1", "38": "100", "44": "100.00", "9123": "1", "9120": "10123", "9204": "Y"}},
     {"expect": "one", "fields": {"35": "2231", "9004": "16012"}},
 
-    {"comment": "The message download is the only recovery this protocol has, and it is deliberately unbuilt. It is refused with ERROR_RESPONSE_OUT and 16123 rather than answered with an empty download, which would say the orders were gone."},
-    {"send": "one", "fields": {"35": "7000", "9004": "0", "9003": "40521", "9300": "0"}},
-    {"expect": "one", "fields": {"35": "2302", "9004": "16123"}},
+    {"comment": "The message download is the only recovery this protocol has -- there is no resend. 7000 names a stream in the header's AlphaChar and a cursor in SequenceNumber (9300); the answer is HEADER_RECORD (7011), a MESSAGE_RECORD (7021) per message after that cursor, and TRAILER_RECORD (7031). The cursor IS the header's TimeStamp1 (9006), so it is captured rather than hard-coded: this scenario shares a process with every run before it, and a download from zero would replay a history that grows."},
+    {"send": "one", "fields": {"35": "1600", "9004": "0", "9003": "40521"}},
+    {"expect": "one", "fields": {"35": "1601", "9004": "0", "9003": "40521"}, "capture": {"cursor": "9006"}},
+    {"send": "one", "fields": {"35": "7000", "9004": "0", "9003": "40521", "9300": "$cursor"}},
+    {"expect": "one", "fields": {"35": "7011", "9004": "0", "9003": "40521"}},
+    {"expect": "one", "fields": {"35": "7031", "9004": "0", "9003": "40521"}},
+
+    {"comment": "A stream this venue does not serve is empty rather than an error: a member loops the download over every stream SYSTEM_INFORMATION_OUT advertised, and refusing one would stop that loop. AlphaChar carries the stream as a BYTE, not a digit -- 9002 here is chr(99)."},
+    {"send": "one", "fields": {"35": "7000", "9004": "0", "9003": "40521", "9002": "c", "9300": "0"}},
+    {"expect": "one", "fields": {"35": "7011", "9004": "0"}},
+    {"expect": "one", "fields": {"35": "7031", "9004": "0"}},
 
     {"control": "orders.cancel_all", "args": {"market": "NORMAL"}},
     {"control": "state.set", "args": {"market": "NORMAL", "state": "CLOSED"}}

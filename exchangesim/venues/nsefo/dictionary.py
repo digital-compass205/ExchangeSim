@@ -175,10 +175,12 @@ BUY_SELL = 54                    # Side
 # PRICE_MOD, an F&O-only structure (transcription §1.5).
 REFERENCE = 9490
 
-# The order and trade download, the recovery this protocol has instead of a
-# resend request -- defined so the request can be read and refused by name,
-# matching Capital Market's own treatment (see build_fo()).
+# The message download, the recovery this protocol has instead of a resend
+# request. DOWNLOAD_DATA is not a wire field of its own: it is the whole
+# recovered message, carried through this dialect as one opaque run of bytes
+# so that MESSAGE_RECORD's variable tail has somewhere to live.
 DOWNLOAD_SEQUENCE = 9492
+DOWNLOAD_DATA = 9493
 
 # ERROR_RESPONSE_OUT: keyed by a bare contract token, not SEC_INFO.
 KEY = 9491
@@ -478,8 +480,10 @@ def header_fields():
                  labels={str(code): name
                          for code, name in X.ERROR_CODES.items()}),
         _number(TIMESTAMP, "Timestamp"),
-        _text(TIMESTAMP1, "TimeStamp1", 8),
-        _text(TIMESTAMP2, "TimeStamp2", 8),
+        # Numbers, not text: jiffies since the epoch and a machine number.
+        # See the header in layouts.py.
+        _number(TIMESTAMP1, "TimeStamp1"),
+        _number(TIMESTAMP2, "TimeStamp2"),
         _number(MESSAGE_LENGTH, "MessageLength"),
     ]
 
@@ -570,6 +574,7 @@ def application_fields():
 
         # -- recovery ---------------------------------------------------
         _number(DOWNLOAD_SEQUENCE, "DownloadSequence"),
+        _text(DOWNLOAD_DATA, "Data"),
 
         # -- ERROR_RESPONSE_OUT ----------------------------------------------
         _text(KEY, "Key", 14),
@@ -806,6 +811,10 @@ def application_messages():
 
         # -- recovery -------------------------------------------------------
         _message(X.DOWNLOAD_REQUEST, "MESSAGE_DOWNLOAD", (DOWNLOAD_SEQUENCE,)),
+        _message(X.HEADER_RECORD, "HEADER_RECORD", (), inbound=False),
+        _message(X.MESSAGE_RECORD, "MESSAGE_RECORD", (DOWNLOAD_DATA,),
+                 inbound=False),
+        _message(X.TRAILER_RECORD, "TRAILER_RECORD", (), inbound=False),
     ]
 
 

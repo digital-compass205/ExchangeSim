@@ -43,7 +43,7 @@ For installing, starting and using it, see **[README.md](README.md)**.
 | Market data | Book, depth, BBO, trade tape and session statistics via CLI, with a live monitor |
 | Web board | Browser view over every running venue, live over Server-Sent Events |
 | Message audit | Every message in and out, and every mutating command, with each field named and each value explained |
-| Recovery | Persistent sequence numbers, ResendRequest, SequenceReset-GapFill, Cancel on Disconnect — at the two FIX venues. NSE has no resend at all, and its message download is deliberately unbuilt |
+| Recovery | Persistent sequence numbers, ResendRequest, SequenceReset-GapFill, Cancel on Disconnect — at the two FIX venues. NSE has no resend at all: recovery is the message download, which replays what a user was sent after a cursor |
 | Encryption | None at the FIX venues. NSE runs AES-256-GCM on every message, written by hand because the standard library has no cipher |
 | Negative testing | Forced rejects, delayed reports, dropped reports |
 
@@ -225,6 +225,53 @@ What actually differs, beyond the bytes, is small and each piece has a home:
   that needs them, and it is also where the two encodings diverge structurally:
   FIX nests the broker in `<PartyEntitlementGrp><PartyDetailGrp>`, binary
   carries a flat `Broker ID` and hangs the entitlements off the message.
+
+### The message download
+
+NNF's whole recovery mechanism, and the thing that stands where a FIX
+`ResendRequest` would. A report produced while a user was signed off is
+dropped rather than queued — there is nothing to queue it for — so the
+client gets it back by asking: `DOWNLOAD_REQUEST (7000)` names a stream and a
+cursor, and the venue answers `HEADER_RECORD (7011)`, a `MESSAGE_RECORD (7021)`
+per message after that cursor, and `TRAILER_RECORD (7031)`.
+
+Five things here are load-bearing.
+
+- **The cursor is the header's own `TimeStamp1`**, in jiffies (1 second =
+  65536). A client does not count messages: it remembers the last stamp it saw
+  and asks for everything after, and zero means the whole trading day. That
+  makes the field load-bearing rather than decorative, and it was eight zero
+  bytes on every message until the download was built. Its epoch is an
+  ASSUMPTION — the document gives the unit and never the origin — and 1980 is
+  used because the header's sibling nanosecond `Timestamp` says so, which keeps
+  one capture from holding two epochs.
+- **The inner header of a record is the ordinary `MESSAGE_HEADER`, not
+  `INNER_MESSAGE_HEADER`.** The document says the opposite in so many words (CM
+  6.6 p.44: "For inner Header Refer Table 2"); the direct interface does not
+  follow it, and a real client confirmed which it reads. The two hold the same
+  nine fields with the first twelve bytes permuted — transaction code at offset
+  0 against trader id at offset 0 — so the wrong one does not fail cleanly.
+- **A recovered message is always the non-trimmed form.** Nothing to do today,
+  because this venue answers in the full structures already, but it is why
+  `MessageStore` keeps the `Message` rather than the encoded frame: a `_TR`
+  structure has no forty-byte header at all and so could never be wrapped. It
+  is also what keeps ciphertext out of the store.
+- **A record is the one structure in this protocol with no published length.**
+  `nnf/layout.py:RecordLayout` is the one class that knows it: `check()` has
+  nothing to check, and `MessageLength` — "the length of the entire message" —
+  is for once not a constant, and is the only way a client finds the record's
+  end.
+- **The download's own three codes are never stored.** A second download would
+  otherwise return the first one wrapped in a third, without bound;
+  `rules.is_recoverable` is where a venue says so.
+
+Streams are the other half. `TimeStamp2` carries the machine number a message
+came from (its eighth byte, which is the low byte of a big-endian `LONG LONG`,
+so the number itself is what goes in), and `SYSTEM_INFORMATION_OUT`'s
+`AlphaChar` carries the count — as a *byte*, not a digit — which the client
+loops its download over. This simulator is one machine and serves one stream
+(`nnf.stream`); asking for another gets an empty download rather than a
+refusal, because refusing would stop that loop.
 
 ## Auctions
 
@@ -889,14 +936,6 @@ built, and refused with a published error code rather than faked:
   (16400) and **Good Till Cancelled / Good Till Date** (16326). Disclosed
   quantity in particular: the core has no replenishment concept, and accepting
   the field while ignoring it would be the worst of both.
-- **the message download** (7000/7011/7021/7031), which is the only recovery
-  this protocol has — there is no resend. A `MESSAGE_RECORD` is 80 to 512
-  bytes, the actual message wrapped with its own inner header inside an outer
-  one, while every structure here is fixed width and the layout engine is built
-  on that being true. A `DOWNLOAD_REQUEST` is answered with `ERROR_RESPONSE_OUT`
-  and 16123 rather than an empty download, which would tell a client its orders
-  were gone. Cancel on Disconnect is therefore observable only through the
-  control plane and the audit, not through the client's own recovery.
 - **the broadcast market-data feed**, which is UDP multicast and LZO-compressed.
   LZO cannot be written under the standard-library-only constraint. Market data
   reaches a person through the control plane, the CLI and the board instead.

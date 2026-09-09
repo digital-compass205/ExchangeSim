@@ -278,7 +278,48 @@ def default_limits(max_order_value=None, max_quantity=None):
     )
 
 
+#: What a download answers when the stream it names is not one this venue
+#: serves. Not an error on the wire: the member is told the stream is empty
+#: and moves on to the next, which is what its loop is for.
+DOWNLOAD_UNKNOWN_STREAM = 0
+
+#: The download's own three answers, which are the one thing a download
+#: must not replay. Storing them would make a second download return the
+#: first one wrapped in a third, and a third return that -- growing without
+#: bound and telling the client nothing.
+NOT_RECOVERABLE = frozenset(str(code) for code in
+                            (X.HEADER_RECORD, X.MESSAGE_RECORD,
+                             X.TRAILER_RECORD))
+
+
+def is_recoverable(msg_type):
+    """Whether a message sent to a user can come back in a download.
+
+    ASSUMPTION: everything else can. Chapter 5 lists what a download
+    returns -- logon and logoff responses, interactive messages from
+    NSE-Control, order and trade responses, trade confirmations, and a set
+    of broadcasts -- but it reads as illustrative rather than closed, and
+    every message this venue sends a user falls inside it. Excluding by
+    that list instead would mean a message type added later is silently
+    unrecoverable; excluding only the download's own codes means the
+    reverse, which is visible.
+    """
+    return str(msg_type) not in NOT_RECOVERABLE
+
+
 ASSUMPTIONS = [
+    "The message download replays every message this venue sent a user, "
+    "bounded by 'nnf.recovery_capacity' (500) rather than by the trading "
+    "day, and keyed on the header's TimeStamp1 in jiffies from 1980 -- the "
+    "document gives that field's unit and never its origin. A client echoes "
+    "the value back rather than reading it, so the choice is invisible to "
+    "it; it matches the sibling nanosecond Timestamp field so one capture "
+    "does not hold two epochs. Two further points came from a real client "
+    "rather than the document: a record's inner header is the ordinary "
+    "MESSAGE_HEADER, not the INNER_MESSAGE_HEADER Chapter 2 prescribes for "
+    "download data, and a recovered message is always the non-trimmed "
+    "form.",
+
     "The Gateway Router's TLS version is configurable, and defaults to '1.3', "
     "which the specification requires and which the RHEL 8 target's Python "
     "supports. An interpreter linked against OpenSSL 1.0.2, such as this "
@@ -358,12 +399,6 @@ NOT_IMPLEMENTED = [
     "The UDP multicast broadcast feed. It is LZO-compressed, and LZO cannot be "
     "written under this project's standard-library-only constraint. Market "
     "data is on the control plane, the CLI and the board instead.",
-    "The message download (7000/7011/7021/7031), which is the only recovery "
-    "this protocol has. A MESSAGE_RECORD is 80 to 512 bytes -- the actual "
-    "message wrapped, with its own inner header, inside an outer one -- and "
-    "every structure here is fixed width. A DOWNLOAD_REQUEST is answered with "
-    "ERROR_RESPONSE_OUT and error 16123 rather than an empty download, which "
-    "would tell a client its orders were gone.",
     "Market-wide index circuit breakers.",
 ]
 

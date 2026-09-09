@@ -203,9 +203,30 @@ Six things here are load-bearing.
   knowing both the tag and the user: it is the same field `BoxConnection` reads
   to route an *inbound* message to a session, answered in. Doing it per handler
   is what let F&O ship four message types that forgot.
-- **Reports produced while a user is disconnected are dropped, not queued.**
-  That inverts the FIX invariant below, and it must: there is no resend to
-  deliver them. The client asks for a download instead.
+- **Reports produced while a user is disconnected are dropped, not queued
+  — but they are still *kept*.** That inverts the FIX invariant below, and it
+  must: there is no resend to deliver them. The client asks for a download
+  instead, and `nnf/recovery.py:MessageStore` is what makes that answerable.
+  `NnfSession.send` files every message on its way out; a report whose owner
+  is signed off never reaches a session at all, so `_emit` files that one
+  through `manager.retain`. Routing it to whoever *triggered* it instead is
+  not a smaller mistake than dropping it: it sent one member's trade
+  confirmation to their counterparty, which is why `_session_for` now
+  answers None for an absent owner rather than falling back.
+- **`TimeStamp1` is the download's cursor, and `MESSAGE_RECORD` is the one
+  structure here without a length.** A client resumes a download from the
+  `TimeStamp1` of the last message it saw (jiffies, 1s = 65536), so leaving
+  that field at zero — as this did — leaves a client nothing to resume
+  from; `TimeStamp2` carries the stream, and `SYSTEM_INFORMATION_OUT`'s
+  `AlphaChar` the stream count to loop over. Both are stamped in
+  `NnfSessionManager.stamp`, not per handler, for the same reason the user
+  id is. A record wraps a whole message, header included, and **that inner
+  header is the ordinary `MESSAGE_HEADER`, not the `INNER_MESSAGE_HEADER`
+  the document prescribes for download data** — a client confirmed it, and
+  the two differ only in their first twelve bytes, so the wrong one parses
+  half a user id as a transaction code. A recovered message is always the
+  non-trimmed form, which is why the store keeps the `Message` rather than
+  the bytes that went out.
 - **The audit records the plaintext packet, not the ciphertext.** Under the
   existing encryption methodology the keystream runs continuously across the
   whole connection, so a packet cannot be decrypted out of order — and

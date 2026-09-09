@@ -33,6 +33,7 @@ from ..audit import DIRECTION_IN, DIRECTION_OUT
 from ..fix import constants as C
 from ..fix.message import MalformedMessage, Message
 from ..fix.render import extract, symbol_of
+from . import types as T
 from .codec import NnfCodec
 from .crypto import CryptoError, PlainCipher
 
@@ -197,6 +198,7 @@ class NnfSession(object):
         if self.box is None:
             return False
         self.name_recipient(message)
+        self.box.manager.retain(self.user_id, message)
         if not self.box.connected:
             self.box.record(DIRECTION_OUT, message, None,
                             error="not delivered: the box is disconnected",
@@ -408,6 +410,7 @@ class BoxConnection(object):
     def send(self, message, session=None):
         if self.transport is None:
             return False
+        self.manager.stamp(message)
         try:
             raw = self.codec.encode(message)
         except ValueError as exc:
@@ -556,7 +559,9 @@ class NnfSessionManager(object):
     def __init__(self, clock, dictionary, layouts, audit=None,
                  heartbeat_seconds=HEARTBEAT_SECONDS,
                  drop_counter_limit=DROP_COUNTER_LIMIT,
-                 user_id_tag=None, heartbeat_code=None, box_id_tag=None):
+                 user_id_tag=None, heartbeat_code=None, box_id_tag=None,
+                 timestamp1_tag=None, timestamp2_tag=None, machine_number=1,
+                 store=None):
         self.clock = clock
         self.dictionary = dictionary
         self.layouts = layouts
@@ -570,9 +575,73 @@ class NnfSessionManager(object):
         self.user_id_tag = user_id_tag
         self.box_id_tag = box_id_tag
         self.heartbeat_code = heartbeat_code
+        #: The header's two remaining exchange-owned fields, named the same
+        #: way: ``TimeStamp1``, the cursor a message download resumes from,
+        #: and ``TimeStamp2``, which carries the stream a message came from.
+        self.timestamp1_tag = timestamp1_tag
+        self.timestamp2_tag = timestamp2_tag
+        #: "In TimeStamp2, machine number is sent from the host end ... if it
+        #: is an interactive connection, machine number is stored in 7th
+        #: position" -- which is the least significant byte of an eight-byte
+        #: big-endian field, so the number itself is what goes in.
+        self.machine_number = int(machine_number)
+        #: What a download replays, or None at a venue that does not offer one.
+        self.store = store
         self._boxes = {}                # box_id -> BoxConnection
         self._users = {}                # user_id -> NnfSessionConfig
         self._live = {}                 # user_id -> NnfSession
+
+    # -- the header fields the exchange owns --------------------------------
+
+    def stamp(self, message):
+        """Fill ``TimeStamp1`` and ``TimeStamp2``, if they are not already set.
+
+        Chapter 2 states both of the header once, so they are true of every
+        message the exchange sends, and neither is decoration: ``TimeStamp1``
+        is the cursor a client quotes back in ``DOWNLOAD_REQUEST`` to say what
+        it has already seen, and ``TimeStamp2`` names the stream it must ask
+        that stream's download for. Filling them here rather than in each
+        venue's handlers is the same call :meth:`NnfSession.name_recipient`
+        makes, for the same reason: a message type added later cannot forget.
+
+        Returns the cursor stamped, so a caller can file the message under it.
+        Idempotent, because a message reaches this twice -- once on its way
+        through a session and once at the box -- and a cursor that moved the
+        second time would not match the copy the download kept.
+        """
+        if self.timestamp2_tag is not None \
+                and message.get(self.timestamp2_tag) is None:
+            message.set(self.timestamp2_tag, str(self.machine_number))
+        if self.timestamp1_tag is None:
+            return None
+        existing = message.get(self.timestamp1_tag)
+        if existing is not None:
+            try:
+                return int(existing)
+            except (TypeError, ValueError):
+                return None
+        seconds = T.epoch_seconds(self.clock.now())
+        sequence = (self.store.sequence(seconds) if self.store
+                    else T.to_nse_jiffies(seconds))
+        message.set(self.timestamp1_tag, str(sequence))
+        return sequence
+
+    def retain(self, user_id, message):
+        """Stamp a message for one user and file it for that user's download.
+
+        Called on the way out of a session, and *instead* of a session for a
+        report whose owner is not signed on -- a trade against a resting order
+        left behind, say. NNF has no resend, so such a report is not queued for
+        delivery: it is filed where the user's next ``DOWNLOAD_REQUEST`` will
+        find it, which is the one thing the download exists for.
+        """
+        if self.user_id_tag is not None \
+                and message.get(self.user_id_tag) is None:
+            message.set(self.user_id_tag, str(user_id))
+        sequence = self.stamp(message)
+        if self.store is not None and sequence is not None:
+            self.store.record(user_id, sequence, message)
+        return sequence
 
     # -- configuration -----------------------------------------------------
 

@@ -56,6 +56,35 @@ def to_nse_nanoseconds(unix_seconds):
     return int(round((float(unix_seconds) - EPOCH_OFFSET) * 1000000000))
 
 
+#: "Jiffy is a Unit of Time (1 second = 65536 jiffies)" -- Chapter 2, of the
+#: header's ``TimeStamp1``. The protocol's third time unit, after seconds and
+#: nanoseconds, and the one a message download's cursor is counted in.
+JIFFIES_PER_SECOND = 65536
+
+
+def epoch_seconds(when):
+    """A ``datetime`` as fractional Unix seconds, read as UTC.
+
+    The clock is injected everywhere here and hands out ``datetime``, while
+    every time field on this wire is a count from an epoch. One conversion,
+    beside the three that use it.
+    """
+    return calendar.timegm(when.timetuple()) + when.microsecond / 1000000.0
+
+
+def to_nse_jiffies(unix_seconds):
+    """Jiffies since the NSE epoch, from a (possibly fractional) Unix time.
+
+    ASSUMPTION: the epoch. The document gives ``TimeStamp1``'s unit and never
+    its origin, so this uses the one the sibling ``Timestamp`` field is defined
+    from. Nothing a client does depends on the choice -- it echoes the value
+    back in a download request rather than reading it -- but two time fields in
+    one header disagreeing about their origin would trap anyone reading a
+    capture beside a real one.
+    """
+    return int((float(unix_seconds) - EPOCH_OFFSET) * JIFFIES_PER_SECOND)
+
+
 def _need(raw, offset, count):
     if offset < 0 or offset + count > len(raw):
         raise MalformedMessage(

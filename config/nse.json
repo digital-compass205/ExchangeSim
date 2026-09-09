@@ -23,6 +23,8 @@
     "heartbeat_interval": 30,
     "heartbeat_drop_limit": 10,
     "require_encryption": false,
+    "stream": 1,
+    "recovery_capacity": 500,
 
     "boxes": [
       {
@@ -107,6 +109,16 @@
     "'sessions' command lists users, because that is what an order's owner",
     "means; the 'boxes' command lists connections. Disconnecting a box signs",
     "off every user on it, as the specification requires.",
+    "",
+    "'nnf.stream' is the machine/stream number this venue stamps on every",
+    "message (the header's TimeStamp2) and the one a DOWNLOAD_REQUEST must",
+    "name, 1 to 127. It is also the count SYSTEM_INFORMATION_OUT advertises",
+    "in AlphaChar, which is what a member loops its message download over; a",
+    "member asking for any other stream gets an empty download rather than an",
+    "error, since refusing would stop that loop. 'nnf.recovery_capacity' is",
+    "how many messages per user that download can still replay -- a ring, not",
+    "a trading day, so a soak test cannot run the process out of memory. The",
+    "cursor a member resumes from is the header's TimeStamp1, in jiffies.",
     "",
     "'gateway_router.dynamic_iv' is how the dynamic half of the IV is laid",
     "out under the 'new' methodology -- the one value here that is NOT",

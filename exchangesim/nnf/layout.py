@@ -368,6 +368,92 @@ class Layout(object):
         return "Layout(%s, %r, %d bytes)" % (self.msg_type, self.name, self.size)
 
 
+class RecordLayout(Layout):
+    """A header wrapped around another whole message: ``MESSAGE_RECORD``.
+
+    The one structure in this protocol that is not fixed width. A message
+    download answers with a record per recovered message -- an outer header
+    saying "this is download data", then the original message entire, its own
+    header included -- so the packet is 40 bytes plus whatever it carries, and
+    ``Layout``'s "the table says N bytes and the fields must reach exactly N"
+    check has nothing to check.
+
+    **The inner header is the ordinary ``MESSAGE_HEADER``, not
+    ``INNER_MESSAGE_HEADER``.** The document says otherwise in so many words
+    (CM 6.6 p.44, Table 18: "For inner Header Refer Table 2") and the direct
+    interface does not follow it: Chapter 11 says to "use MSG_HEADER described
+    in this document wherever applicable in front of business messages", and a
+    real client confirmed it reads the direct-connection header here. The two
+    hold the same nine fields with the first twelve bytes permuted -- the
+    transaction code at offset 0 against the trader id at offset 0 -- so
+    getting it wrong does not fail cleanly: a client reads half a user id as a
+    transaction code and misparses the whole record. That is why this class
+    takes no header of its own. There is one header in this protocol, and the
+    payload already carries it.
+
+    The payload travels above the wire as a latin-1 string in one tag, the way
+    :class:`exchangesim.nnf.types.Raw` carries a key -- the identity mapping on
+    bytes, so nothing between here and the venue has to hold ``bytes``.
+    """
+
+    __slots__ = ("payload_tag", "payload_name")
+
+    def __init__(self, msg_type, name, payload_tag, header,
+                 payload_name="Data"):
+        Layout.__init__(self, msg_type, name, header.size, (), header)
+        self.payload_tag = payload_tag
+        self.payload_name = payload_name
+
+    @property
+    def body_size(self):
+        """Meaningless here, and equal to ``size`` so ``check`` stays quiet."""
+        return self.header.size
+
+    @property
+    def tags(self):
+        return (self.payload_tag,)
+
+    def check(self):
+        """Nothing to check: this structure has no published fixed length."""
+        return None
+
+    def decode(self, raw, message=None):
+        if len(raw) < self.header.size:
+            raise MalformedMessage(
+                "%s (%s) is %d bytes, shorter than the %d byte header it wraps"
+                % (self.name, self.msg_type, len(raw), self.header.size))
+        message = message or Message.create(self.msg_type)
+        self.header.decode(raw, message)
+        message.set(self.payload_tag, raw[self.header.size:].decode("latin-1"))
+        return message
+
+    def encode(self, message):
+        payload = message.get(self.payload_tag) or ""
+        if isinstance(payload, bytes):
+            body = payload
+        else:
+            body = payload.encode("latin-1")
+        if self.header.length_tag is not None:
+            # "set to the length of the entire message, including the length
+            # of Message Header" -- which for once is not a constant.
+            message.set(self.header.length_tag,
+                        str(self.header.size + len(body)))
+        buffer = bytearray(self.header.size)
+        for field in self.header.fields:
+            field.encode(message, buffer)
+        return bytes(buffer) + body
+
+    def redacted_spans(self):
+        """Header fields only. What the payload holds is another message's
+        business, and it was redacted when *it* was recorded."""
+        return [(field.offset, field.end) for field in self.header.fields
+                if getattr(field, "redact", False)]
+
+    def __repr__(self):
+        return "RecordLayout(%s, %r, %d + payload)" % (self.msg_type, self.name,
+                                                       self.header.size)
+
+
 class NnfDictionary(object):
     """Every structure of one segment, by transaction code.
 
@@ -391,6 +477,11 @@ class NnfDictionary(object):
     def define(self, code, name, size, fields):
         """Build and register one structure. ``code`` is the transaction code."""
         return self.add(Layout(str(code), name, size, fields, self.header))
+
+    def define_record(self, code, name, payload_tag, payload_name="Data"):
+        """Register the one variable-length structure: see :class:`RecordLayout`."""
+        return self.add(RecordLayout(str(code), name, payload_tag, self.header,
+                                     payload_name))
 
     def layout(self, msg_type):
         return self._layouts.get(str(msg_type))

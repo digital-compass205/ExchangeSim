@@ -494,7 +494,8 @@ class HeaderUserIdTest(unittest.TestCase):
             {X.SIGN_ON_REQUEST_OUT, X.SYSTEM_INFORMATION_OUT,
              X.ORDER_CONFIRMATION, X.ORDER_MOD_CONFIRMATION,
              X.ORDER_CANCEL_CONFIRMATION, X.ORDER_ERROR,
-             X.ERROR_RESPONSE_OUT, X.SIGN_OFF_REQUEST_OUT},
+             X.HEADER_RECORD, X.MESSAGE_RECORD, X.TRAILER_RECORD,
+             X.SIGN_OFF_REQUEST_OUT},
             seen)
 
     def test_a_trade_report_names_the_side_it_is_sent_to(self):
@@ -522,3 +523,209 @@ class HeaderUserIdTest(unittest.TestCase):
         self.assertEqual(X.SIGN_ON_REQUEST_OUT, int(refusal.msg_type))
         self.assertEqual("16042", refusal.get(D.ERROR_CODE))
         self.assertEqual(str(UNKNOWN_USER), refusal.get(D.USER_ID))
+
+
+class MessageDownloadTest(unittest.TestCase):
+    """DOWNLOAD_REQUEST: the only recovery this protocol has.
+
+    There is no resend here. A report produced while a user was signed off was
+    dropped rather than queued, and the client gets it back by asking -- so
+    this is the mechanism that stands where a FIX ResendRequest would.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness()
+        self.addCleanup(self.harness.close)
+        self.client = self.harness.client()
+
+    def download(self, since=0, stream=None, user_id=USER_ONE):
+        fields = {D.DOWNLOAD_SEQUENCE: since}
+        if stream is not None:
+            fields[D.ALPHA_CHAR] = chr(stream)
+        self.client.send(X.DOWNLOAD_REQUEST, fields, user_id=user_id)
+        return self.client.received()
+
+    def codes_of(self, messages):
+        return [int(message.msg_type) for message in messages]
+
+    def inner(self, record):
+        """The message a MESSAGE_RECORD carries, decoded."""
+        payload = record.get(D.DOWNLOAD_DATA).encode("latin-1")
+        code = self.harness.venue.layouts.transaction_code(payload)
+        return self.harness.venue.layouts.layout(code).decode(payload)
+
+    def cursor(self, user_id=USER_ONE):
+        """The TimeStamp1 of the most recent message this user was sent.
+
+        What a real client remembers and quotes back, and what keeps a test
+        clear of the sign-on response and system information already in the
+        store -- a download from zero replays those too, because the document
+        lists the logon response first among what recovery returns. Asking for
+        system information is how a test gets one: the harness clears the
+        transport once the opening sequence is done, and the sign-on response
+        goes with it.
+        """
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=user_id)
+        stamp = int(self.client.last().get(D.TIMESTAMP1))
+        self.client.clear()
+        return stamp
+
+    def recovered(self, since=0, stream=None, user_id=USER_ONE):
+        """Just the messages a download replayed, decoded and in order."""
+        return [self.inner(message)
+                for message in self.download(since, stream, user_id)
+                if int(message.msg_type) == X.MESSAGE_RECORD]
+
+    def test_a_download_is_a_header_then_records_then_a_trailer(self):
+        since = self.cursor()
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        self.client.clear()
+
+        answered = self.download(since=since)
+        codes = self.codes_of(answered)
+        self.assertEqual(X.HEADER_RECORD, codes[0])
+        self.assertEqual(X.TRAILER_RECORD, codes[-1])
+        self.assertEqual({X.MESSAGE_RECORD}, set(codes[1:-1]))
+
+    def test_a_record_carries_the_whole_message_it_recovered(self):
+        since = self.cursor()
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        confirmation = self.client.last()
+        self.client.clear()
+
+        recovered = self.recovered(since=since)[0]
+        self.assertEqual(str(X.ORDER_CONFIRMATION), recovered.msg_type)
+        self.assertEqual(confirmation.get(D.ORDER_NUMBER),
+                         recovered.get(D.ORDER_NUMBER))
+        self.assertEqual(str(USER_ONE), recovered.get(D.USER_ID))
+
+    def test_the_inner_header_is_the_ordinary_one(self):
+        # The document prescribes INNER_MESSAGE_HEADER for download data, with
+        # the trader id at offset 0; a real client reads the direct-connection
+        # header, with the transaction code there. The two differ only in
+        # their first twelve bytes, so the wrong one does not fail cleanly --
+        # half a user id parses as a transaction code.
+        since = self.cursor()
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        self.client.clear()
+
+        payload = self.download(since=since)[1].get(
+            D.DOWNLOAD_DATA).encode("latin-1")
+        self.assertEqual(X.ORDER_CONFIRMATION,
+                         self.harness.venue.layouts.transaction_code(payload))
+
+    def test_a_cursor_replays_only_what_came_after_it(self):
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        first = self.client.last()
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        self.client.clear()
+
+        replayed = self.recovered(since=int(first.get(D.TIMESTAMP1)))
+        self.assertEqual(1, len(replayed))
+        self.assertEqual("2", replayed[0].get(D.ORDER_NUMBER))
+
+    def test_the_cursor_is_the_timestamp_the_client_was_given(self):
+        # TimeStamp1 is what a client quotes back, so it has to be there and
+        # it has to move. It was eight zero bytes on every message until the
+        # download was built, which left a client nothing to resume from.
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        first = int(self.client.last().get(D.TIMESTAMP1))
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        second = int(self.client.last().get(D.TIMESTAMP1))
+        self.assertLess(0, first)
+        self.assertLess(first, second)
+
+    def test_a_record_repeats_the_cursor_of_the_message_it_carries(self):
+        # So that a client reading its cursor off the outer header and one
+        # reading it off the inner header end in the same place.
+        since = self.cursor()
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        self.client.clear()
+
+        record = self.download(since=since)[1]
+        self.assertEqual(self.inner(record).get(D.TIMESTAMP1),
+                         record.get(D.TIMESTAMP1))
+
+    def test_what_a_user_missed_while_signed_off_is_recoverable(self):
+        # The whole point of the download. A report for a signed-off user is
+        # dropped on the wire -- NNF has no resend and there is nothing to
+        # queue it for -- but it is still that user's, and this is where they
+        # get it. USER_TWO rather than USER_ONE, because USER_ONE cancels on
+        # disconnect and so would have no resting order left to trade.
+        self.client.sign_on(USER_TWO)
+        self.client.new_order(USER_TWO, side=D.BuySell.SELL, contract=FUTURE, quantity=25, price="25400.00")
+        order_number = self.client.last().get(D.ORDER_NUMBER)
+        self.harness.venue.manager.session_for(("nnf", USER_TWO)).disconnect()
+
+        aggressor = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+        aggressor.new_order(USER_THREE, side=D.BuySell.BUY, contract=FUTURE, quantity=25, price="25400.00")
+
+        self.client.sign_on(USER_TWO)
+        self.client.clear()
+        fills = [m for m in self.recovered(user_id=USER_TWO)
+                 if int(m.msg_type) == X.TRADE_CONFIRMATION]
+        self.assertEqual(1, len(fills))
+        # A trade confirmation names the order under ResponseOrderNumber.
+        self.assertEqual(order_number, fills[0].get(D.RESPONSE_ORDER_NUMBER))
+        self.assertEqual(str(USER_TWO), fills[0].get(D.USER_ID))
+
+    def test_a_signed_off_users_report_never_reaches_their_counterparty(self):
+        # It did: the owner's session was looked up with the triggering
+        # session as a default, so a trade against an order whose owner had
+        # signed off was reported to whoever hit it.
+        self.client.sign_on(USER_TWO)
+        self.client.new_order(USER_TWO, side=D.BuySell.SELL, contract=FUTURE, quantity=25, price="25400.00")
+        self.harness.venue.manager.session_for(("nnf", USER_TWO)).disconnect()
+
+        aggressor = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+        aggressor.clear()
+        aggressor.new_order(USER_THREE, side=D.BuySell.BUY, contract=FUTURE, quantity=25, price="25400.00")
+
+        for message in aggressor.received():
+            self.assertEqual(str(USER_THREE), message.get(D.USER_ID),
+                             "%s was addressed to somebody else"
+                             % message.msg_type)
+
+    def test_the_download_does_not_replay_itself(self):
+        # Storing the download's own answers would make a second download
+        # return the first one wrapped in a third, without bound.
+        since = self.cursor()
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        self.client.clear()
+        first = len(self.recovered(since=since))
+        self.client.clear()
+        second = len(self.recovered(since=since))
+        self.assertEqual(first, second)
+
+    def test_a_stream_this_venue_does_not_serve_is_empty_rather_than_an_error(self):
+        # A member loops the download over every stream the system information
+        # advertised. Refusing one it does not have would stop that loop; an
+        # empty download lets it move on.
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        self.client.clear()
+        answered = self.download(stream=99)
+        self.assertEqual([X.HEADER_RECORD, X.TRAILER_RECORD],
+                         self.codes_of(answered))
+
+    def test_the_system_information_says_how_many_streams_to_ask(self):
+        # "In the SYSTEM_INFORMATION_OUT message response, this field should
+        # contain the number of modules" -- a byte, not a digit.
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        information = self.client.last()
+        self.assertEqual(self.harness.venue.stream,
+                         ord(information.get(D.ALPHA_CHAR)[0]))
+
+    def test_every_message_names_the_stream_it_came_from(self):
+        # TimeStamp2 carries the machine number, in its eighth byte for an
+        # interactive connection -- which is the low byte of a big-endian
+        # LONG LONG, so the number itself is what goes in.
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25, price="25400.00")
+        self.assertEqual(str(self.harness.venue.stream),
+                         self.client.last().get(D.TIMESTAMP2))
+
+    def test_a_download_from_the_latest_cursor_replays_nothing(self):
+        # A client that is up to date asks anyway, on every reconnection, and
+        # must be told "nothing" rather than handed its whole day again.
+        since = self.cursor()
+        self.client.clear()
+        self.assertEqual([], self.recovered(since=since))

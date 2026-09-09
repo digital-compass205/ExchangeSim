@@ -54,6 +54,7 @@ from ...core.market import Market
 from ...core.prices import PriceCodec
 from ...core.validation import StandardValidator
 from ...nnf import types as WT
+from ...nnf import recovery
 from ...nnf.codec import NnfCodec
 from ...nnf.session import NnfSessionConfig, NnfSessionManager
 from ...tls import certs
@@ -585,14 +586,31 @@ class NsefoVenue(Venue):
 
     # -- sessions ----------------------------------------------------------
 
+    #: "Machine / Stream no. ... can range from 1 to 127". A member downloads
+    #: one stream at a time, looping until each has answered, and learns how
+    #: many to loop over from SYSTEM_INFORMATION_OUT's AlphaChar. This
+    #: simulator is one machine and puts every message on one stream, so
+    #: ``nnf.stream`` is both that stream's number and the count advertised:
+    #: a member asking for any lower-numbered stream is answered with an empty
+    #: download rather than an error, which is what its loop expects.
     def _build_sessions(self):
         nnf = self.config.section("nnf")
+        self.stream = int(nnf.get("stream", 1))
+        if not 1 <= self.stream <= 127:
+            raise ConfigError("nnf.stream must be between 1 and 127, not %d"
+                              % self.stream)
         self.application = NsefoApplication(self)
         self.manager = NnfSessionManager(
             self.clock, self.dictionary, self.layouts, audit=self.audit,
             heartbeat_seconds=nnf.get("heartbeat_interval", 30),
             drop_counter_limit=nnf.get("heartbeat_drop_limit", 10),
             user_id_tag=D.USER_ID, box_id_tag=D.BOX_ID,
+            timestamp1_tag=D.TIMESTAMP1, timestamp2_tag=D.TIMESTAMP2,
+            machine_number=self.stream,
+            store=recovery.MessageStore(
+                capacity=nnf.get("recovery_capacity",
+                                 recovery.DEFAULT_CAPACITY),
+                recoverable=rules.is_recoverable),
             heartbeat_code=int(self.layouts.layout(str(X.HEARTBEAT)).msg_type))
         self.manager.on_checksum_failure = self.application.on_checksum_failure
 

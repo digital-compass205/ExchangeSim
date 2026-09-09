@@ -324,29 +324,79 @@ class NseApplication(Application):
         return None
 
     def _on_download_request(self, session, message):
-        """Refused, with the protocol's own way of saying so.
+        """DOWNLOAD_REQUEST: replay what this user was sent, after a cursor.
 
-        The message download is the only recovery NNF has -- there is no
-        resend -- and it is deliberately unbuilt, because a MESSAGE_RECORD is
-        80 to 512 bytes: the actual message wrapped, with its own inner header,
-        inside an outer one. Every structure in this venue is fixed width, and
-        the layout engine is built on that being true; a variable-length record
-        is a change to the engine rather than a table to transcribe.
+        The only recovery this protocol has. There is no resend, so a report
+        produced while a user was signed off was dropped rather than queued
+        (``NnfSession.send``), and this is where the client gets it back: it
+        names a stream and the ``TimeStamp1`` of the last message it saw, and
+        the exchange answers with a header, a record per message after that
+        cursor, and a trailer. Zero means the whole trading day.
 
-        So it is refused rather than answered with an empty download, which
-        would tell a client its orders were gone. ERROR_RESPONSE_OUT is the
-        protocol's own carrier for a refusal that fits no other message.
+        Two things about a record are not in the document, or contradict it,
+        and both come from a real client:
+
+        * **The inner header is the ordinary MESSAGE_HEADER**, the
+          direct-connection one, not the ``INNER_MESSAGE_HEADER`` Chapter 2
+          prescribes for download data. See ``nnf/layout.py:RecordLayout``.
+        * **A recovered message is always the non-trimmed form.** Nothing to do
+          here today, because this venue answers in the full structures
+          already, but it is why the store keeps the message rather than the
+          bytes that went out: a ``_TR`` structure has no forty-byte header at
+          all and so could never be wrapped.
+
+        The outer record repeats the recovered message's own ``TimeStamp1``
+        rather than taking a fresh one, so that a client tracking its cursor
+        from the outer header and one tracking it from the inner header end in
+        the same place.
         """
-        reply = Message.create(str(X.ERROR_RESPONSE_OUT))
-        reply.set(D.ERROR_CODE, "16123")            # CANT_COMPLETE_YOUR_REQUEST
-        reply.set(D.USER_ID, str(session.user_id))
-        reply.set(D.LOG_TIME, str(self._nse_seconds()))
-        reply.set(D.ERROR_MESSAGE,
-                  "message download is not implemented by this simulator")
-        session.send(reply)
-        log.info("user %s asked for a message download, which is unbuilt",
-                 session.target_comp_id)
+        store = self.venue.manager.store
+        stream = _stream_of(message.get(D.ALPHA_CHAR))
+        since = _download_cursor(message.get(D.DOWNLOAD_SEQUENCE))
+
+        session.send(self._download_marker(X.HEADER_RECORD, stream))
+
+        records = []
+        if stream in (0, self.venue.stream):
+            if store.truncated(session.user_id, since):
+                log.warning("user %s asked for a download from %d, which is "
+                            "older than the %d messages kept for it",
+                            session.target_comp_id, since,
+                            store.count(session.user_id))
+            records = store.after(session.user_id, since)
+            for _sequence, recovered in records:
+                session.send(self._download_record(recovered, stream))
+        else:
+            log.info("user %s asked stream %d for a download; this venue is "
+                     "stream %d, so that one is empty",
+                     session.target_comp_id, stream, self.venue.stream)
+
+        session.send(self._download_marker(X.TRAILER_RECORD, stream))
+        log.info("user %s recovered %d message(s) after %d on stream %d",
+                 session.target_comp_id, len(records), since, stream)
         return None
+
+    def _download_marker(self, code, stream):
+        """HEADER_RECORD or TRAILER_RECORD: a bare header, and nothing else."""
+        marker = Message.create(str(code))
+        marker.set(D.ERROR_CODE, str(X.NO_ERROR))
+        marker.set(D.ALPHA_CHAR, _stream_char(stream))
+        marker.set(D.LOG_TIME, str(self._nse_seconds()))
+        return marker
+
+    def _download_record(self, recovered, stream):
+        """MESSAGE_RECORD: one recovered message, header and all, wrapped."""
+        layout = self.venue.layouts.layout_for(recovered)
+        record = Message.create(str(X.MESSAGE_RECORD))
+        record.set(D.ERROR_CODE, str(X.NO_ERROR))
+        record.set(D.ALPHA_CHAR, _stream_char(stream))
+        record.set(D.LOG_TIME, str(self._nse_seconds()))
+        for tag in (D.TIMESTAMP1, D.TIMESTAMP2):
+            value = recovered.get(tag)
+            if value is not None:
+                record.set(tag, value)
+        record.set(D.DOWNLOAD_DATA, layout.encode(recovered).decode("latin-1"))
+        return record
 
     # -- refusals ----------------------------------------------------------
 
@@ -454,22 +504,41 @@ class NseApplication(Application):
             message = self._render(event)
             if message is None:
                 continue
+            order = getattr(event, "order", None)
             target = self._session_for(event, session)
             if target is None:
+                self._retain(order, message)
                 continue
-            self._deliver(target, message, getattr(event, "order", None))
+            self._deliver(target, message, order)
 
     def _session_for(self, event, fallback):
-        """The user that owns the order an event concerns.
+        """The session an event's report belongs to, or None for a user of
+        this venue who is not signed on.
 
-        A fill touches a resting order that may belong to a different user on a
-        different box, so reports route by owner rather than to whoever sent the
-        message that triggered them.
+        Reports route by the order's owner, never by whoever triggered the
+        event -- a trade touches a resting order belonging to somebody else.
+        Falling back to the trigger when the owner is *absent* was worse than
+        dropping the report: it sent one member's trade confirmation to their
+        counterparty. An order whose key is not this venue's shape is a
+        control-plane injection with no owner to route to, and still falls
+        back to the client that caused the event.
         """
         order = getattr(event, "order", None)
         if order is None:
             return fallback
-        return self._sessions.get(order.session_key, fallback)
+        key = getattr(order, "session_key", None)
+        if isinstance(key, tuple) and len(key) == 2 and key[0] == "nnf":
+            return self._sessions.get(key)
+        return fallback
+
+    def _retain(self, order, message):
+        """File a report for a user who is not signed on to receive it."""
+        key = getattr(order, "session_key", None)
+        if not (isinstance(key, tuple) and len(key) == 2):
+            return
+        self.venue.manager.retain(key[1], message)
+        log.info("user %s is signed off; %s kept for their next download",
+                 key[1], rules.describe_transaction(int(message.msg_type)))
 
     def _deliver(self, target, message, order):
         """Send a report, honouring any injected drop or delay."""
@@ -652,6 +721,12 @@ class NseApplication(Application):
         message = Message.create(str(X.SYSTEM_INFORMATION_OUT))
         message.set(D.ERROR_CODE, str(X.NO_ERROR))
         message.set(D.LOG_TIME, str(self._nse_seconds()))
+        # "In the SYSTEM_INFORMATION_OUT message response, this field should
+        # contain the number of modules. Based upon this number of modules,
+        # Frontend will populate the module_id in alpha_char field of
+        # DOWNLOAD_REQUEST" -- so this is what tells a client how many streams
+        # to loop its message download over. A byte, not a digit.
+        message.set(D.ALPHA_CHAR, _stream_char(self.venue.stream))
 
         market = self.engine.market(self.venue.market_name)
         state = market.state.market_state if market is not None \
@@ -716,6 +791,36 @@ def _int(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _stream_of(alpha_char):
+    """The stream a download request names.
+
+    "Machine / Stream no. should be sent in the first byte (AlphaChar[0]) and
+    should be of type integer value and not as character value" -- so this is
+    the byte, not the digit: stream 1 is ``chr(1)``, not ``"1"``. Read strictly,
+    because the two readings overlap (``"1"`` is byte 49, a stream a member
+    could legitimately name) and guessing between them would send a member the
+    wrong machine's messages. An absent or zero AlphaChar means "whichever
+    stream you have", which is what a client that has not read
+    SYSTEM_INFORMATION_OUT will send.
+    """
+    if not alpha_char:
+        return 0
+    return ord(alpha_char[0])
+
+
+def _stream_char(stream):
+    """A stream number as the two-character AlphaChar field carries it."""
+    return chr(stream & 0xFF)
+
+
+def _download_cursor(value):
+    """The ``TimeStamp1`` a download resumes after; zero means the whole day."""
+    try:
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _join(symbol, series):
