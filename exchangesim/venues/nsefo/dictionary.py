@@ -805,8 +805,27 @@ def application_messages():
                  inbound=False),
         _message(X.PRICE_MOD_IN, "PRICE_MOD", _PRICE_MOD_TAGS),
 
+        # -- the trimmed order flow -----------------------------------------
+        #
+        # The same value domains over a second, compact encoding: the tag sets
+        # are the plain ones, because a trimmed structure carries a subset of
+        # the same fields and a dictionary here checks values rather than
+        # presence (see layouts.py). What differs is entirely below this
+        # layer -- the header, the offsets and the widths.
+        _message(X.BOARD_LOT_IN_TR, "MS_OE_REQUEST_TR", _ORDER_TAGS),
+        _message(X.ORDER_MOD_IN_TR, "MS_OM_REQUEST_TR", _ORDER_TAGS),
+        _message(X.ORDER_CANCEL_IN_TR, "MS_OM_REQUEST_TR", _ORDER_TAGS),
+        _message(X.ORDER_CONFIRMATION_TR, "MS_OE_RESPONSE_TR", _ORDER_TAGS,
+                 inbound=False),
+        _message(X.ORDER_MOD_CONFIRMATION_TR, "MS_OE_RESPONSE_TR",
+                 _ORDER_TAGS, inbound=False),
+        _message(X.ORDER_CXL_CONFIRMATION_TR, "MS_OE_RESPONSE_TR",
+                 _ORDER_TAGS, inbound=False),
+
         # -- trades ---------------------------------------------------------
         _message(X.TRADE_CONFIRMATION, "MS_TRADE_CONFIRM", _TRADE_TAGS,
+                 inbound=False),
+        _message(X.TRADE_CONFIRMATION_TR, "MS_TRADE_CONFIRM_TR", _TRADE_TAGS,
                  inbound=False),
 
         # -- recovery -------------------------------------------------------

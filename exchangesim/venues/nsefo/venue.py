@@ -610,7 +610,8 @@ class NsefoVenue(Venue):
             store=recovery.MessageStore(
                 capacity=nnf.get("recovery_capacity",
                                  recovery.DEFAULT_CAPACITY),
-                recoverable=rules.is_recoverable),
+                recoverable=rules.is_recoverable,
+                normalise=rules.untrimmed),
             heartbeat_code=int(self.layouts.layout(str(X.HEARTBEAT)).msg_type))
         self.manager.on_checksum_failure = self.application.on_checksum_failure
 

@@ -361,6 +361,19 @@ sample code pins both the minimum and the maximum to 1.3. The generated key in
 `var/tls/` is a **simulator** key: it exists so a client can complete a
 handshake, and it should never be promoted anywhere.
 
+**Order entry has two encodings, and a real gateway uses the second.** The
+plain 316-byte `MS_OE_REQUEST` (`BOARD_LOT_IN 2000`) and the compact 158-byte
+`MS_OE_REQUEST_TR` (`BOARD_LOT_IN_TR 20000`) carry the same values under the
+same fields; what differs is that **a trimmed structure has no 40-byte
+message header** — it opens with eight bytes, and its responses
+(`ORDER_CONFIRMATION_TR 20073`, `ORDER_MOD_CONFIRMATION_TR 20074`,
+`ORDER_CXL_CONFIRMATION_TR 20075`, `TRADE_CONFIRMATION_TR 20222`) with
+twenty-two or thirty-four. Both are served, and you are answered in whichever
+you send; unsolicited reports follow the encoding the *order* was entered in.
+A refused trimmed order comes back as its confirmation code with a non-zero
+`ErrorCode`, because the appendix publishes no trimmed `ORDER_ERROR`. Spread,
+two-leg and three-leg orders are not trimmed and are not supported.
+
 There is no resend. A report produced while a user was signed off is dropped
 rather than queued, and the client gets it back by asking: **`DOWNLOAD_REQUEST`
 (7000)** names a stream in the header's `AlphaChar` and a cursor in

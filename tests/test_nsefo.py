@@ -729,3 +729,183 @@ class MessageDownloadTest(unittest.TestCase):
         since = self.cursor()
         self.client.clear()
         self.assertEqual([], self.recovered(since=since))
+
+
+class TrimmedOrderFlowTest(unittest.TestCase):
+    """The compact encoding of order entry -- what a real gateway sends.
+
+    Appendix p.298-310. These structures do not carry the forty-byte
+    MESSAGE_HEADER at all: each opens with a prefix of its own, eight bytes
+    for a request. Chapter 11 says "Only Trim-NNF protocol is supported by
+    Direct Interface", and a real gateway sends orders in nothing else -- so
+    this is not an optional extra, it is the order flow.
+
+    Both encodings are served and a client is answered in the one it asked
+    in, which is why almost every test here is a pair.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness()
+        self.addCleanup(self.harness.close)
+        self.client = self.harness.client()
+
+    def test_a_trimmed_order_is_confirmed_in_the_trimmed_structure(self):
+        self.client.trimmed_order(USER_ONE, contract=FUTURE, quantity=25,
+                                  price="25400.00")
+        confirmation = self.client.last()
+        self.assertEqual(X.ORDER_CONFIRMATION_TR,
+                         int(confirmation.msg_type))
+        self.assertEqual("0", confirmation.get(D.ERROR_CODE))
+        self.assertEqual("1", confirmation.get(D.ORDER_NUMBER))
+        self.assertEqual("25", confirmation.get(D.VOLUME))
+        self.assertEqual("NIFTY", confirmation.get(D.SYMBOL))
+        self.assertEqual(str(USER_ONE), confirmation.get(D.USER_ID))
+
+    def test_a_plain_order_is_still_confirmed_in_the_plain_structure(self):
+        # The two encodings coexist; serving one must not have moved the other.
+        self.client.new_order(USER_ONE, contract=FUTURE, quantity=25,
+                              price="25400.00")
+        self.assertEqual(X.ORDER_CONFIRMATION,
+                         int(self.client.last().msg_type))
+
+    def test_the_two_encodings_carry_the_same_order(self):
+        # The strongest statement this file can make: same fields in, same
+        # fields out, different bytes on the wire.
+        self.client.trimmed_order(USER_ONE, contract=OPTION, quantity=250,
+                                  price="45.20")
+        trimmed = self.client.last()
+        self.client.new_order(USER_ONE, contract=OPTION, quantity=250,
+                              price="45.20")
+        plain = self.client.last()
+
+        for tag in (D.SYMBOL, D.INSTRUMENT_NAME, D.EXPIRY_DATE,
+                    D.STRIKE_PRICE, D.OPTION_TYPE, D.VOLUME, D.PRICE,
+                    D.BOOK_TYPE, D.BUY_SELL, D.TOTAL_VOL_REMAINING,
+                    D.ACCOUNT_NUMBER, D.USER_ID, D.BROKER_ID):
+            self.assertEqual(plain.get(tag), trimmed.get(tag),
+                             "tag %d differs between the encodings" % tag)
+
+    def test_a_trimmed_order_wire_frame_is_the_published_size(self):
+        # 158 bytes of structure, and no forty-byte header anywhere in it.
+        message = self.client.trimmed_order(USER_ONE, contract=FUTURE,
+                                            price="25400.00")
+        raw = self.harness.venue.layouts.layout(X.BOARD_LOT_IN_TR).encode(
+            message)
+        self.assertEqual(158, len(raw))
+        self.assertEqual(X.BOARD_LOT_IN_TR,
+                         self.harness.venue.layouts.transaction_code(raw))
+
+    def test_modify_and_cancel_answer_in_the_trimmed_structure(self):
+        self.client.trimmed_order(USER_ONE, contract=FUTURE, quantity=25,
+                                  price="25400.00")
+        self.client.clear()
+
+        self.client.trimmed_modify(USER_ONE, "1", quantity=50)
+        self.assertEqual(X.ORDER_MOD_CONFIRMATION_TR,
+                         int(self.client.last().msg_type))
+
+        self.client.trimmed_cancel(USER_ONE, "1")
+        self.assertEqual(X.ORDER_CXL_CONFIRMATION_TR,
+                         int(self.client.last().msg_type))
+
+    def test_a_refused_trimmed_order_is_the_confirmation_with_an_error(self):
+        # ASSUMPTION: the appendix publishes no trimmed ORDER_ERROR, and
+        # MS_OE_RESPONSE_TR carries an ErrorCode and a ReasonCode -- so the
+        # response structure is built to say "refused" and there is no other
+        # code to say it with. See rules.TRIMMED_RESPONSES.
+        self.client.trimmed_order(USER_ONE, contract=FUTURE, price="25400.00",
+                                  extra={D.BOOK_TYPE: D.BookType.NEGOTIATED})
+        refusal = self.client.last()
+        self.assertEqual(X.ORDER_CONFIRMATION_TR, int(refusal.msg_type))
+        self.assertEqual("16561", refusal.get(D.ERROR_CODE))
+        self.assertEqual("16561", refusal.get(D.REASON_CODE))
+
+    def test_a_trade_answers_each_side_in_its_own_encoding(self):
+        # Nothing answers a trade confirmation, so the encoding is read off
+        # the order rather than off a request -- and two members on opposite
+        # sides of one trade can be using different ones.
+        resting = self.harness.client(box_id=BOX_ONE, users=(USER_ONE,))
+        aggressor = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+        resting.trimmed_order(USER_ONE, side=D.BuySell.SELL, contract=FUTURE,
+                              quantity=25, price="25400.00")
+        resting.clear()
+
+        aggressor.new_order(USER_THREE, side=D.BuySell.BUY, contract=FUTURE,
+                            quantity=25, price="25400.00")
+
+        self.assertEqual([X.TRADE_CONFIRMATION_TR],
+                         [int(m.msg_type) for m in resting.received()])
+        self.assertEqual([X.ORDER_CONFIRMATION, X.TRADE_CONFIRMATION],
+                         [int(m.msg_type) for m in aggressor.received()])
+
+    def test_a_cancel_on_disconnect_keeps_the_orders_own_encoding(self):
+        self.client.trimmed_order(USER_ONE, contract=FUTURE, quantity=25,
+                                  price="25400.00")
+        self.client.clear()
+        self.harness.command("orders.cancel_all", market="NORMAL")
+        self.assertEqual([X.ORDER_CXL_CONFIRMATION_TR],
+                         [int(m.msg_type) for m in self.client.received()])
+
+    def test_a_download_replays_the_non_trimmed_form(self):
+        # "A downloaded message is always a non-trimmed message. If the
+        # original message from the exchange was trimmed, the corresponding
+        # non-trimmed message is used" -- and it must be, because a trimmed
+        # structure has no forty-byte header to wrap in a MESSAGE_RECORD.
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        since = int(self.client.last().get(D.TIMESTAMP1))
+        self.client.trimmed_order(USER_ONE, contract=FUTURE, quantity=25,
+                                  price="25400.00")
+        self.assertEqual(X.ORDER_CONFIRMATION_TR,
+                         int(self.client.last().msg_type))
+        self.client.clear()
+
+        self.client.send(X.DOWNLOAD_REQUEST,
+                         {D.DOWNLOAD_SEQUENCE: since}, user_id=USER_ONE)
+        layouts = self.harness.venue.layouts
+        recovered = []
+        for message in self.client.received():
+            if int(message.msg_type) != X.MESSAGE_RECORD:
+                continue
+            payload = message.get(D.DOWNLOAD_DATA).encode("latin-1")
+            code = layouts.transaction_code(payload)
+            recovered.append(layouts.layout(code).decode(payload))
+
+        self.assertEqual([X.ORDER_CONFIRMATION],
+                         [int(m.msg_type) for m in recovered])
+        self.assertEqual("1", recovered[0].get(D.ORDER_NUMBER))
+
+    def test_a_refused_trimmed_order_recovers_as_an_order_error(self):
+        # The plain flow has a separate code for a refusal where the trimmed
+        # flow has one code and an ErrorCode, so the untrimming has to read
+        # the error rather than map the code blindly.
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        since = int(self.client.last().get(D.TIMESTAMP1))
+        self.client.trimmed_order(USER_ONE, contract=FUTURE, price="25400.00",
+                                  extra={D.BOOK_TYPE: D.BookType.NEGOTIATED})
+        self.client.clear()
+
+        self.client.send(X.DOWNLOAD_REQUEST,
+                         {D.DOWNLOAD_SEQUENCE: since}, user_id=USER_ONE)
+        layouts = self.harness.venue.layouts
+        codes = []
+        for message in self.client.received():
+            if int(message.msg_type) != X.MESSAGE_RECORD:
+                continue
+            payload = message.get(D.DOWNLOAD_DATA).encode("latin-1")
+            codes.append(layouts.transaction_code(payload))
+        self.assertEqual([X.ORDER_ERROR], codes)
+
+    def test_the_spread_family_is_still_refused(self):
+        # Not trimmed, and not supported: the two facts are independent, and
+        # serving the trimmed flow must not have quietly opened this one.
+        self.client.raw(2100, user_id=USER_ONE)
+        self.assertEqual(rules.SPREAD_NOT_ALLOWED,
+                         int(self.client.last().get(D.ERROR_CODE)))
+
+    def test_the_immediate_ack_family_is_refused_by_code(self):
+        # Chapter 15's opt-in, which lives on its own Gateway Router port.
+        # It shares MS_OE_REQUEST_TR's structure, so it would decode -- and
+        # is refused on the transaction code instead of half-answered.
+        self.client.raw(X.TRIMMED_BOARD_LOT_ACK_IN, user_id=USER_ONE)
+        self.assertIsNone(
+            self.harness.venue.layouts.layout(X.TRIMMED_BOARD_LOT_ACK_IN))

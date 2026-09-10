@@ -3,11 +3,17 @@
 Scoped exactly as ``docs/specs/NSE_FO_TRANSCRIPTION.md`` scopes Phase 1: the
 Regular Lot book of the Normal market, continuous trading, plus what a client
 needs to log on, receive a system-information snapshot and receive trade
-reports. Spread/2L/3L orders, Stop Loss/MIT, Negotiated Trade, give-up, the
-"Trimmed" (``_TR``) low-latency-ack family and the broadcast feed are all
-out of scope, exactly as they are for the venue this package will eventually
-build (``rules.ASSUMPTIONS`` in a later phase records the refusal code for
-each).
+reports. Spread/2L/3L orders, Stop Loss/MIT, Negotiated Trade, give-up and the
+broadcast feed are out of scope, and ``rules.NOT_IMPLEMENTED`` records the
+refusal code for each.
+
+The **"Trimmed" (``_TR``) order flow is served**, and it is not an optional
+extra: a real gateway sends orders in it and nothing else. Chapter 11 says as
+much -- "Only Trim-NNF protocol is supported by Direct Interface" -- so the
+plain 316-byte structures and the compact ones are both accepted, and a client
+is answered in whichever it asked in. What is *not* built is Chapter 15's
+immediate-acknowledgement family (``TRIMMED_*_ACK_IN``), which is a separate
+opt-in on a separate Gateway Router port.
 
 **The single most dangerous property of this venue: ten transaction codes are
 numerically identical to Capital Market's, and decode to a different, larger
@@ -115,6 +121,42 @@ BATCH_ORDER_CANCEL = 9002
 # -- trades ------------------------------------------------------------------
 
 TRADE_CONFIRMATION = 2222
+
+# -- the "trimmed" order flow ------------------------------------------------
+#
+# A second, more compact encoding of order entry, modification, cancellation
+# and their answers -- appendix p.298-310. These do **not** use the forty-byte
+# MESSAGE_HEADER at all: each opens with a compact prefix of its own. The
+# naming pattern is the plain code with a `0` inserted after its first digit
+# (2000 -> 20000, 2073 -> 20073), which is descriptive of the table rather
+# than a rule the document states; every value here was read from it.
+#
+# This is what a real gateway sends. The plain 316-byte structures are served
+# too, and both answer in kind.
+
+BOARD_LOT_IN_TR = 20000
+ORDER_MOD_IN_TR = 20040
+ORDER_CANCEL_IN_TR = 20070
+ORDER_CONFIRMATION_TR = 20073
+ORDER_MOD_CONFIRMATION_TR = 20074
+ORDER_CXL_CONFIRMATION_TR = 20075
+TRADE_CONFIRMATION_TR = 20222
+
+#: The quick cancel, which shares MS_OM_REQUEST_TR. No plain equivalent is
+#: built here, so it is named to be refused rather than served.
+ORDER_QUICK_CANCEL_IN_TR = 20060
+
+#: Chapter 15's immediate-acknowledgement family: a member opts in by sending
+#: these *instead of* the codes above, and gets a 22-byte MS_ACK_RESPONSE the
+#: moment the order is received, ahead of the ordinary confirmation. It is a
+#: separate feature on a separate Gateway Router port ("This new request must
+#: be transmitted to the Exchange via a separate communication channel"), and
+#: is not built -- see rules.NOT_IMPLEMENTED.
+TRIMMED_BOARD_LOT_ACK_IN = 20400
+TRIMMED_ORDER_MOD_ACK_IN = 20402
+TRIMMED_ORDER_CANCEL_ACK_IN = 20404
+PRICE_MOD_ACK_IN = 20406
+
 
 # -- order and trade download, the recovery this protocol has instead of -----
 # a resend request.

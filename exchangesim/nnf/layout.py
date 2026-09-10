@@ -474,9 +474,21 @@ class NnfDictionary(object):
         self._layouts[layout.msg_type] = layout
         return layout
 
-    def define(self, code, name, size, fields):
-        """Build and register one structure. ``code`` is the transaction code."""
-        return self.add(Layout(str(code), name, size, fields, self.header))
+    def define(self, code, name, size, fields, header=None):
+        """Build and register one structure. ``code`` is the transaction code.
+
+        ``header`` overrides the dialect's own. Almost nothing needs it: every
+        ordinary structure in this protocol is prefaced by the same forty-byte
+        MESSAGE_HEADER, which is why the dictionary holds one. The "trimmed"
+        family is the exception and the reason this argument exists -- those
+        structures do not use MESSAGE_HEADER at all, but open with a compact
+        prefix of their own, eight bytes for a request and twenty-two or
+        thirty-four for a response. What they keep is the one thing framing
+        depends on: the transaction code, a SHORT at offset 0, so a codec can
+        still find the layout before it knows which header to read.
+        """
+        return self.add(Layout(str(code), name, size, fields,
+                               header or self.header))
 
     def define_record(self, code, name, payload_tag, payload_name="Data"):
         """Register the one variable-length structure: see :class:`RecordLayout`."""

@@ -48,6 +48,11 @@ class NsefoApplication(Application):
         self._sessions = {}
         #: order id -> the member's own NNFField reference, echoed on reports.
         self._references = {}
+        #: Order numbers entered over the trimmed structures. A report about
+        #: an order goes back in the encoding that order arrived in, including
+        #: the unsolicited ones -- a trade confirmation, a cancel on
+        #: disconnect -- which no request is there to answer.
+        self._trimmed = set()
 
     # -- the box sequence --------------------------------------------------
 
@@ -415,6 +420,16 @@ class NsefoApplication(Application):
         return self._reject_change(session, message, X.ORDER_ERROR, error_code)
 
     def _reject_change(self, session, message, code, error_code):
+        """Refuse a request by echoing it back with an error.
+
+        The encoding comes from the request rather than from an order, because
+        a refused order entry has no order -- and because a refusal in the
+        trimmed flow is the *confirmation* code carrying a non-zero ErrorCode,
+        the appendix publishing no trimmed ORDER_ERROR at all. See
+        rules.TRIMMED_RESPONSES.
+        """
+        trimmed = rules.plain_code(message.msg_type) is not None
+        code = rules.trimmed_code(code, trimmed)
         reply = Message.create(str(code))
         for tag, value in message.fields:
             if tag not in (D.MESSAGE_LENGTH,):
@@ -461,15 +476,43 @@ class NsefoApplication(Application):
 
     def _remember(self, message, events):
         reference = message.get(D.NNF_FIELD)
+        trimmed = rules.plain_code(message.msg_type) is not None
         for event in events:
             order = getattr(event, "order", None)
             if order is None:
                 continue
             if reference is not None:
                 self._references.setdefault(order.order_id, reference)
-            if order.status in rules.TERMINAL_STATUSES:
-                self._references.pop(order.order_id, None)
+            if trimmed:
+                self._trimmed.add(order.order_id)
             break
+
+    def _forget(self, events):
+        """Drop what an order needed, once its last report has been rendered.
+
+        After ``_emit`` and never before. A cancellation confirmation is built
+        from an order that is *already* terminal, so forgetting on the way in
+        cost that report both the member's own NnfField reference and the
+        encoding the order was entered in -- it went back plain to a client
+        that had only ever spoken trimmed.
+        """
+        for event in events:
+            order = getattr(event, "order", None)
+            if order is None or order.status not in rules.TERMINAL_STATUSES:
+                continue
+            self._references.pop(order.order_id, None)
+            self._trimmed.discard(order.order_id)
+
+    def _code_for(self, order, code):
+        """The transaction code a report about ``order`` goes out under.
+
+        The trimmed encoding if that is how the order arrived, and the plain
+        one otherwise. Read off the *order* rather than off the request being
+        answered, because a trade confirmation and a cancel on disconnect
+        answer no request at all.
+        """
+        order_id = getattr(order, "order_id", None)
+        return rules.trimmed_code(code, order_id in self._trimmed)
 
     # -- outbound ----------------------------------------------------------
 
@@ -484,6 +527,7 @@ class NsefoApplication(Application):
                 self._retain(order, message)
                 continue
             self._deliver(target, message, order)
+        self._forget(events)
 
     def _session_for(self, event, fallback):
         """The session an event's report belongs to, or None for a user of
@@ -555,8 +599,14 @@ class NsefoApplication(Application):
     # -- reports -----------------------------------------------------------
 
     def _base_report(self, order, code):
-        """The 316-byte order structure, filled from the order."""
-        message = Message.create(str(code))
+        """One order report: the 316-byte structure, or its trimmed twin.
+
+        The same fields either way. A trimmed structure carries a subset of
+        them, and a layout only writes the fields it declares, so filling the
+        superset and letting the layout choose is not laziness -- it is what
+        keeps one renderer honest about two encodings.
+        """
+        message = Message.create(str(self._code_for(order, code)))
         message.set(D.ERROR_CODE, str(X.NO_ERROR))
         message.set(D.LOG_TIME, str(self._nse_seconds()))
         message.set(D.TIMESTAMP, str(self._nse_nanoseconds()))
@@ -613,7 +663,8 @@ class NsefoApplication(Application):
     def _render_filled(self, event):
         """TRADE_CONFIRMATION, from the snapshot the event carries."""
         order = event.order
-        message = Message.create(str(X.TRADE_CONFIRMATION))
+        message = Message.create(
+            str(self._code_for(order, X.TRADE_CONFIRMATION)))
         message.set(D.ERROR_CODE, str(X.NO_ERROR))
         message.set(D.LOG_TIME, str(self._nse_seconds()))
         message.set(D.TIMESTAMP, str(self._nse_nanoseconds()))
@@ -796,6 +847,14 @@ _HANDLERS = {
     X.BOARD_LOT_IN: NsefoApplication._on_new_order,
     X.ORDER_MOD_IN: NsefoApplication._on_modify,
     X.ORDER_CANCEL_IN: NsefoApplication._on_cancel,
+    # The trimmed forms reach the same three handlers: they carry the same
+    # fields under the same tags, and everything that differs between the two
+    # encodings -- the header, the offsets, the widths -- was settled by the
+    # layout before a handler sees a Message. What each one *answers* in is
+    # the difference, and that is `_trimmed` below.
+    X.BOARD_LOT_IN_TR: NsefoApplication._on_new_order,
+    X.ORDER_MOD_IN_TR: NsefoApplication._on_modify,
+    X.ORDER_CANCEL_IN_TR: NsefoApplication._on_cancel,
     X.SIGN_OFF_REQUEST_IN: NsefoApplication._on_sign_off,
     X.SYSTEM_INFORMATION_IN: NsefoApplication._on_system_information,
     X.DOWNLOAD_REQUEST: NsefoApplication._on_download_request,

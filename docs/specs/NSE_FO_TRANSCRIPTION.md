@@ -525,13 +525,23 @@ original four-digit code and insert a `0` after its first digit — `2000→2000
 pattern observed, not a rule stated in the document; every individual value used in this
 transcription was read from the table, not derived.
 
-**Recommendation for Phase 1: treat the whole `_TR` family, and the immediate-ack feature
-(Chapter 15) it belongs to, as out of scope for the first cut.** It is a genuinely separate
-optional encoding of the same order-entry/confirmation/trade-confirm concepts already covered by
-§1.4/§1.6, introduced late in the document's revision history (v9.43-9.44, p.4-5) as a
-low-latency-ack optimisation, not something a baseline conformance client requires. Refusing
-every `_TR`/`_ACK_IN` transaction code with `ERR_BAD_TRANS_CODE (16003)` is consistent with how
-this simulator already refuses transaction codes it does not implement.
+**That recommendation was wrong, and a real gateway proved it.** Phase 1 scoped the
+whole `_TR` family out as an optional low-latency extra; it is not optional. Chapter 11
+says "Only Trim-NNF protocol is supported by Direct Interface" (p.216), and the client
+under test sends order entry in `MS_OE_REQUEST_TR` and nothing else — so refusing these
+codes refused the venue's entire order flow. They are served now: `venues/nsefo/layouts.py`
+defines all four structures with `HeaderLayout`s of their own, and a client is answered in
+whichever encoding it asked in.
+
+What remains out of scope is the narrower thing this section conflated with them: the
+**immediate-ack feature** of Chapter 15 (`TRIMMED_*_ACK_IN` 20400/20402/20404 and the
+22-byte `MS_ACK_RESPONSE`), which the document puts on a separate Gateway Router port and
+channel (p.252) — a second listener rather than a second structure.
+
+One thing the appendix does not publish is a trimmed equivalent of `ORDER_ERROR (2231)`,
+`ORDER_MOD_REJECT (2042)` or `ORDER_CANCEL_REJECT (2072)`. Since `MS_OE_RESPONSE_TR` carries
+both an `ErrorCode` and a `ReasonCode`, a refusal is taken to be the confirmation code with a
+non-zero error; see `rules.TRIMMED_RESPONSES`, which records it as an ASSUMPTION.
 
 ### 1.10 The Gateway Router / box connection — identical to CM
 

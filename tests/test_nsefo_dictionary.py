@@ -38,6 +38,16 @@ PUBLISHED_SIZES = {
     # what RECORD_CODES below is about.
     X.HEADER_RECORD: 40,
     X.TRAILER_RECORD: 40,
+    # The trimmed order flow: a second, compact encoding of the same four
+    # messages, and the shape a real gateway sends. None of these carries the
+    # forty-byte MESSAGE_HEADER at all -- see layouts.py.
+    X.BOARD_LOT_IN_TR: 158,
+    X.ORDER_MOD_IN_TR: 186,
+    X.ORDER_CANCEL_IN_TR: 186,
+    X.ORDER_CONFIRMATION_TR: 240,
+    X.ORDER_MOD_CONFIRMATION_TR: 240,
+    X.ORDER_CXL_CONFIRMATION_TR: 240,
+    X.TRADE_CONFIRMATION_TR: 230,
     X.SYSTEM_INFORMATION_IN: 44,
     X.SYSTEM_INFORMATION_OUT: 106,
     X.BOARD_LOT_IN: 316,

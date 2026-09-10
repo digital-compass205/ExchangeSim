@@ -54,13 +54,22 @@ class MessageStore(object):
     hole in exactly the mechanism that exists to close holes.
     """
 
-    def __init__(self, capacity=DEFAULT_CAPACITY, recoverable=None):
+    def __init__(self, capacity=DEFAULT_CAPACITY, recoverable=None,
+                 normalise=None):
         self.capacity = int(capacity)
         #: ``recoverable(msg_type) -> bool``. The venue's, because which
         #: transaction codes are a user's own traffic is the venue's fact --
         #: and because the download's own three codes must not be stored, or a
         #: second download would replay the first one.
         self._recoverable = recoverable or (lambda msg_type: True)
+        #: ``normalise(message) -> message``, applied on the way in. This is
+        #: where "a downloaded message is always the non-trimmed message" is
+        #: honoured: a venue that answered live in the compact ``_TR``
+        #: structures files the full form instead, because a ``_TR`` structure
+        #: has no forty-byte header and so could never be wrapped in a record.
+        #: Done on the way in rather than on the way out so that the cost is
+        #: paid once per message rather than once per download.
+        self._normalise = normalise or (lambda message: message)
         self._records = {}              # user_id -> [(sequence, Message)]
         self._last = 0                  # the highest sequence handed out
 
@@ -86,7 +95,7 @@ class MessageStore(object):
         if not self._recoverable(message.msg_type):
             return False
         records = self._records.setdefault(int(user_id), [])
-        records.append((sequence, message))
+        records.append((sequence, self._normalise(message)))
         if len(records) > self.capacity:
             del records[:len(records) - self.capacity]
         return True

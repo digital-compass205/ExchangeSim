@@ -251,11 +251,14 @@ Five things here are load-bearing.
   follow it, and a real client confirmed which it reads. The two hold the same
   nine fields with the first twelve bytes permuted — transaction code at offset
   0 against trader id at offset 0 — so the wrong one does not fail cleanly.
-- **A recovered message is always the non-trimmed form.** Nothing to do today,
-  because this venue answers in the full structures already, but it is why
-  `MessageStore` keeps the `Message` rather than the encoded frame: a `_TR`
-  structure has no forty-byte header at all and so could never be wrapped. It
-  is also what keeps ciphertext out of the store.
+- **A recovered message is always the non-trimmed form.** F&O serves order
+  entry in two encodings, and a `_TR` structure has no forty-byte header at
+  all, so it could never be wrapped in a record — which is why `MessageStore`
+  keeps the `Message` rather than the encoded frame, and takes a `normalise`
+  hook (`rules.untrimmed`) that files the plain twin. That hook reads the
+  error code rather than mapping the transaction code blindly, because one
+  trimmed code recovers as either a confirmation or an `ORDER_ERROR`. Keeping
+  the `Message` is also what keeps ciphertext out of the store.
 - **A record is the one structure in this protocol with no published length.**
   `nnf/layout.py:RecordLayout` is the one class that knows it: `check()` has
   nothing to check, and `MessageLength` — "the length of the entire message" —
@@ -941,6 +944,17 @@ built, and refused with a published error code rather than faked:
   reaches a person through the control plane, the CLI and the board instead.
 - **trade modification and cancellation**, the freeze and approval flow, and
   market-wide index circuit breakers.
+
+**Order entry is served in both published encodings.** The plain 316-byte
+`MS_OE_REQUEST` and the compact 158-byte `MS_OE_REQUEST_TR`, which carries no
+forty-byte header at all — and which is what a real gateway sends, Chapter 11
+saying "Only Trim-NNF protocol is supported by Direct Interface". A client is
+answered in whichever it asked in, and an unsolicited report follows the
+encoding its *order* arrived in. The one gap the appendix leaves is a trimmed
+`ORDER_ERROR`: there is none, so a refusal is the confirmation code carrying a
+non-zero `ErrorCode` — an ASSUMPTION, in `rules.TRIMMED_RESPONSES`. Chapter 15's
+immediate-acknowledgement codes share these structures but live on a separate
+Gateway Router port, and are unbuilt.
 
 And three things that are built but not to the letter:
 

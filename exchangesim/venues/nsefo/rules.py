@@ -379,7 +379,106 @@ def default_limits(max_order_value=None, max_quantity=None):
     )
 
 
+
+# -- the trimmed order flow --------------------------------------------------
+
+#: A trimmed request against its plain twin. Both encodings are served, and a
+#: client is answered in the one it asked in -- so this is read in both
+#: directions rather than being a rewrite on the way in.
+TRIMMED_REQUESTS = {
+    X.BOARD_LOT_IN_TR: X.BOARD_LOT_IN,
+    X.ORDER_MOD_IN_TR: X.ORDER_MOD_IN,
+    X.ORDER_CANCEL_IN_TR: X.ORDER_CANCEL_IN,
+}
+
+#: What each plain response becomes for an order entered over the trimmed
+#: structures.
+#:
+#: ASSUMPTION: a *refusal* comes back as the confirmation code with a non-zero
+#: ErrorCode. The appendix publishes no trimmed equivalent of ORDER_ERROR
+#: (2231), ORDER_MOD_REJECT (2042) or ORDER_CANCEL_REJECT (2072), and
+#: MS_OE_RESPONSE_TR carries both an ErrorCode and a ReasonCode -- so the
+#: response structure is built to say "refused" and there is no other code to
+#: say it with. The alternative reading is that a trimmed order is refused in
+#: the *plain* structure; that would mean one order flow answering in two
+#: encodings, which nothing in the document suggests.
+TRIMMED_RESPONSES = {
+    X.ORDER_CONFIRMATION: X.ORDER_CONFIRMATION_TR,
+    X.ORDER_MOD_CONFIRMATION: X.ORDER_MOD_CONFIRMATION_TR,
+    X.ORDER_CANCEL_CONFIRMATION: X.ORDER_CXL_CONFIRMATION_TR,
+    X.TRADE_CONFIRMATION: X.TRADE_CONFIRMATION_TR,
+    X.ORDER_ERROR: X.ORDER_CONFIRMATION_TR,
+    X.ORDER_MOD_REJECT: X.ORDER_MOD_CONFIRMATION_TR,
+    X.ORDER_CANCEL_REJECT: X.ORDER_CXL_CONFIRMATION_TR,
+}
+
+#: The reverse, for the message download: "a downloaded message is always a
+#: non-trimmed message ... if the original message from the exchange was
+#: trimmed, the corresponding non-trimmed message is used". A trimmed
+#: structure has no forty-byte header, so it could not be wrapped in a
+#: MESSAGE_RECORD even in principle.
+#:
+#: The plain confirmation is the twin of a trimmed one whether or not it
+#: carried an error, because the plain flow says "refused" with its own codes
+#: and the trimmed flow cannot -- so a refusal recovers as ORDER_ERROR and a
+#: confirmation as ORDER_CONFIRMATION, off the same trimmed code.
+UNTRIMMED_RESPONSES = {
+    X.ORDER_CONFIRMATION_TR: (X.ORDER_CONFIRMATION, X.ORDER_ERROR),
+    X.ORDER_MOD_CONFIRMATION_TR: (X.ORDER_MOD_CONFIRMATION,
+                                  X.ORDER_MOD_REJECT),
+    X.ORDER_CXL_CONFIRMATION_TR: (X.ORDER_CANCEL_CONFIRMATION,
+                                  X.ORDER_CANCEL_REJECT),
+    X.TRADE_CONFIRMATION_TR: (X.TRADE_CONFIRMATION, X.TRADE_CONFIRMATION),
+}
+
+
+def plain_code(msg_type):
+    """The plain transaction code a trimmed request carries, or None."""
+    try:
+        return TRIMMED_REQUESTS.get(int(msg_type))
+    except (TypeError, ValueError):
+        return None
+
+
+def trimmed_code(code, trimmed):
+    """Which of a response's two codes to answer with."""
+    return TRIMMED_RESPONSES.get(code, code) if trimmed else code
+
+
+def untrimmed(message):
+    """The form of a message a message download replays.
+
+    A trimmed response becomes its plain twin, chosen by whether it carried an
+    error, because the plain flow has separate codes for a refusal where the
+    trimmed flow has one code and an ErrorCode field. Anything else is already
+    the right shape and is returned untouched -- and *not* copied, because the
+    store keeps what it is given and nothing mutates a sent message.
+    """
+    try:
+        pair = UNTRIMMED_RESPONSES.get(int(message.msg_type))
+    except (TypeError, ValueError):
+        return message
+    if pair is None:
+        return message
+    confirmation, refusal = pair
+    failed = (message.get(D.ERROR_CODE) or "0") != "0"
+    recovered = message.copy()
+    recovered.set(D.TRANSACTION_CODE, str(refusal if failed else confirmation))
+    return recovered
+
+
 ASSUMPTIONS = [
+    "The trimmed (_TR) order flow is served alongside the plain 316-byte "
+    "structures, and a client is answered in the encoding it asked in -- read "
+    "off the *order* rather than off the request, so that a trade confirmation "
+    "and a cancel on disconnect, which answer no request, still go back in "
+    "the right one. What the appendix does not publish is a trimmed equivalent "
+    "of ORDER_ERROR (2231), ORDER_MOD_REJECT (2042) or ORDER_CANCEL_REJECT "
+    "(2072), so a refused trimmed order is answered with its confirmation "
+    "code and a non-zero ErrorCode -- MS_OE_RESPONSE_TR carries both an "
+    "ErrorCode and a ReasonCode, and there is no other code to refuse with. "
+    "See rules.TRIMMED_RESPONSES.",
+
     "The message download replays every message this venue sent a user, "
     "bounded by 'nnf.recovery_capacity' (500) rather than by the trading "
     "day, and keyed on the header's TimeStamp1 in jiffies from 1980 -- the "
@@ -471,6 +570,16 @@ ASSUMPTIONS = [
 
 #: Flows that are deliberately unbuilt, and refused rather than half-simulated.
 NOT_IMPLEMENTED = [
+    "Chapter 15's immediate order acknowledgement (TRIMMED_BOARD_LOT_ACK_IN "
+    "20400, TRIMMED_ORDER_MOD_ACK_IN 20402, TRIMMED_ORDER_CANCEL_ACK_IN "
+    "20404 and the 22-byte MS_ACK_RESPONSE they are answered with). A "
+    "member opts in by sending these instead of the ordinary trimmed codes "
+    "and gets an acknowledgement the moment the order is received, ahead "
+    "of the confirmation -- but the document puts it on a separate Gateway "
+    "Router port and channel, which is a second listener rather than a "
+    "second structure. The ordinary trimmed flow it sits on top of is "
+    "served in full.",
+
     "The pre-open and Postclose phases (transcription §2.2): both are "
     "published market statuses this simulator does not enter. The pre-open "
     "needs its own uncrossing rule set the way Capital Market's does, and "

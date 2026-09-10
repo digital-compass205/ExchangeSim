@@ -117,6 +117,7 @@ Reach for any venue module as a template only after checking these, because each
 | Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` | the pre-open, with a **four**-rule chain: no surplus-direction tie-break | none built; its pre-open and its fifth status, Postclose, are published but unimplemented |
 | Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` | **none**, and a market configured with any mode is refused at start-up | none either, though an `STPC` bit exists on the wire and is refused |
 | Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message | none; every field of a structure is always on the wire | the same |
+| Order-entry encoding | one | one per encoding | one | **two**: the plain 316-byte structure and the compact `_TR` one, which carries no 40-byte header at all. A real gateway sends only the second |
 | Acknowledgement | only for an order that rests untraded | **before** matching -- `Market(ack_on_entry=True)` | **before** matching, for the same reason and more sharply: the acknowledgement is where the client learns the order number | the same |
 | Rejection | `OrdRejReason(103)` on an Execution Report | its own reject codes | a numeric `ErrorCode` in the header of the erroring form of the same transaction | the same, from its **own** table -- 16521 means different things at the two venues |
 | Encryption | none | none (the credential is opaque) | **AES-256-GCM on every message**, under a key collected from a separate Gateway Router port | the same, over its own router on its own port |
@@ -282,6 +283,39 @@ Three consequences worth keeping:
   no tag number means one thing in one dictionary and something else in the
   other. The 9400+ reservation Capital Market wrote down is what made that
   assertion possible rather than aspirational.
+
+**The trimmed order flow is a third header, not a third protocol.** F&O
+publishes order entry twice: the 316-byte `MS_OE_REQUEST` and a compact
+`MS_OE_REQUEST_TR` of 158, and Chapter 11 says flatly that a direct
+connection uses the second — which is what a real gateway sends and
+nothing else. What makes them different is not the fields, which are the same
+values under the same tags, but that **a `_TR` structure does not carry the
+40-byte `MESSAGE_HEADER`**: it opens with eight bytes of its own, and the
+responses with twenty-two (`MS_OE_RESPONSE_TR`) and thirty-four
+(`MS_TRADE_CONFIRM_TR`). So `NnfDictionary.define(..., header=...)` takes a
+per-structure header, and the one field all four keep is the one framing
+needs: the transaction code, a SHORT at offset 0.
+
+Three consequences:
+
+- **One renderer serves both.** `_base_report` fills the superset and the
+  layout writes what it declares, so there is no second set of handlers to
+  drift. Which code goes out is `_code_for`, read off the **order** and not
+  off the request — a trade confirmation and a cancel on disconnect answer
+  no request, and must still go back in the encoding the order arrived in.
+- **The trimmed flow has no way to say "refused".** No trimmed `ORDER_ERROR`
+  is published, and `MS_OE_RESPONSE_TR` carries an `ErrorCode` and a
+  `ReasonCode`, so a refusal is the *confirmation* code with a non-zero
+  error. That is an ASSUMPTION, and it is in `rules.TRIMMED_RESPONSES`.
+- **A download replays the plain form**, because a `_TR` structure has no
+  40-byte header to wrap in a `MESSAGE_RECORD`. `rules.untrimmed` is the
+  `MessageStore`'s `normalise` hook, and it reads the error code rather than
+  mapping the transaction code blindly: one trimmed code becomes either a
+  confirmation or an `ORDER_ERROR`.
+
+Chapter 15's immediate-acknowledgement codes (`TRIMMED_*_ACK_IN`) share these
+structures but are a *separate listener* on a separate Gateway Router port,
+and are unbuilt.
 
 A future's `StrikePrice` is **-1**, not 0 -- the protocol breaking its own "zero
 means absent" rule, and the one place where reading the sibling document's
