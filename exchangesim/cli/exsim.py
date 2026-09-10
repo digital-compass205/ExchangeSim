@@ -171,12 +171,12 @@ def build_parser():
                        help="show one entry field by field instead of the list")
     audit.add_argument("--symbol", "-s", help="only this instrument's traffic")
     audit.add_argument("--kind", choices=("fix", "control"),
-                       help="FIX messages or control commands")
+                       help="wire messages or control commands")
     audit.add_argument("--direction", "-d", choices=("in", "out"))
     audit.add_argument("--type", "-t", dest="msg_type",
-                       help="a MsgType or a command name, e.g. D or order.new")
+                       help="a message type or a command name, e.g. D or order.new")
     audit.add_argument("--exclude", "-x", dest="exclude",
-                       help="hide these MsgTypes or command names, e.g. 0,1")
+                       help="hide these message types or command names, e.g. 0,1")
     audit.add_argument("--since", help="from this time, e.g. 09:30:00")
     audit.add_argument("--until", help="up to this time")
     audit.add_argument("--limit", "-n", type=int, default=50)
