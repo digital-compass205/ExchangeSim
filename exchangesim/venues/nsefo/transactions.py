@@ -118,6 +118,46 @@ PRICE_MOD_IN = 2013
 FREEZE_TO_CONTROL = 2170
 BATCH_ORDER_CANCEL = 9002
 
+# -- spread orders -----------------------------------------------------------
+#
+# Chapter 5. "Spread order is a combination of two normal orders on two
+# contracts with same symbol and different expiry dates" -- a calendar spread,
+# quoted at the *difference* between the two legs' prices rather than at a
+# price of its own.
+#
+# Every one of these codes carries the same 480-byte MS_SPD_OE_REQUEST, which
+# is the plain 316-byte MS_OE_REQUEST as its first leg, then PriceDiff, then
+# two 80-byte MS_SPD_LEG_INFO blocks. The same "ten codes, one structure"
+# pattern the plain order flow has, and the same reason to check it in a test.
+
+SP_BOARD_LOT_IN = 2100
+SP_ORDER_CANCEL_IN = 2106
+SP_ORDER_MOD_IN = 2118
+SP_ORDER_CONFIRMATION = 2124
+SP_ORDER_CXL_REJ_OUT = 2127
+SP_ORDER_CXL_CONFIRMATION = 2130
+SP_ORDER_MOD_REJ_OUT = 2133
+SP_ORDER_MOD_CON_OUT = 2136
+SP_ORDER_ERROR = 2154
+
+#: Cancellation by the system -- broker suspension, or the end-of-day batch.
+#: "For this transcode existing structure MS_SPD_OE_REQUEST will be used."
+BATCH_SPREAD_CXL_OUT = 9004
+
+#: Two-leg and three-leg orders. They share MS_SPD_OE_REQUEST and nothing
+#: else: PriceDiff is "used for spread order only. It is not used for 2L/3L",
+#: so they are a different instrument with the same envelope, and are refused
+#: rather than half-served. See rules.NOT_IMPLEMENTED.
+TWOL_BOARD_LOT_IN = 2102
+THRL_BOARD_LOT_IN = 2104
+TWOL_ORDER_CONFIRMATION = 2125
+THRL_ORDER_CONFIRMATION = 2126
+TWOL_ORDER_CXL_CONFIRMATION = 2131
+THRL_ORDER_CXL_CONFIRMATION = 2132
+TWOL_ORDER_ERROR = 2155
+THRL_ORDER_ERROR = 2156
+
+
 # -- trades ------------------------------------------------------------------
 
 TRADE_CONFIRMATION = 2222

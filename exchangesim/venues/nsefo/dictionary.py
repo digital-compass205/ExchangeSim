@@ -175,6 +175,33 @@ BUY_SELL = 54                    # Side
 # PRICE_MOD, an F&O-only structure (transcription §1.5).
 REFERENCE = 9490
 
+# The spread order's own fields (Chapter 5). Leg 1 reuses every tag the plain
+# order structure already defines -- it *is* the plain structure -- so only the
+# price difference and leg 2's own copies of the order fields are new. Leg 3
+# is present in the structure and never filled for a spread ("For spread order
+# entry leg3 is not filled"), so it is transcribed as reserved rather than
+# given tags nothing would ever set.
+PRICE_DIFF = 9700
+LEG2_TOKEN_NO = 9701
+LEG2_INSTRUMENT_NAME = 9702
+LEG2_SYMBOL = 9703
+LEG2_EXPIRY_DATE = 9704
+LEG2_STRIKE_PRICE = 9705
+LEG2_OPTION_TYPE = 9706
+LEG2_CA_LEVEL = 9707
+LEG2_BUY_SELL = 9708
+LEG2_DISCLOSED_VOL = 9709
+LEG2_DISCLOSED_VOL_REMAINING = 9710
+LEG2_TOTAL_VOL_REMAINING = 9711
+LEG2_VOLUME = 9712
+LEG2_VOLUME_FILLED_TODAY = 9713
+LEG2_PRICE = 9714
+LEG2_TRIGGER_PRICE = 9715
+LEG2_MIN_FILL_AON = 9716
+LEG2_OPEN_CLOSE = 9717
+LEG2_ORDER_TYPE = 9718
+
+
 # The message download, the recovery this protocol has instead of a resend
 # request. DOWNLOAD_DATA is not a wire field of its own: it is the whole
 # recovered message, carried through this dialect as one opaque run of bytes
@@ -573,6 +600,34 @@ def application_fields():
         _text(REFERENCE, "Reference", 4),
 
         # -- recovery ---------------------------------------------------
+        # -- the spread order's own fields ------------------------------
+        # A price, and the one in this dialect that may be negative: it is
+        # the gap between two contracts, not a level.
+        FieldDef(PRICE_DIFF, "PriceDiff", FieldType.PRICE,
+                 max_decimals=PRICE_DECIMALS),
+        _number(LEG2_TOKEN_NO, "Leg2TokenNo"),
+        _text(LEG2_INSTRUMENT_NAME, "Leg2InstrumentName", 6),
+        _text(LEG2_SYMBOL, "Leg2Symbol", 10),
+        _number(LEG2_EXPIRY_DATE, "Leg2ExpiryDate"),
+        _text(LEG2_STRIKE_PRICE, "Leg2StrikePrice"),
+        _text(LEG2_OPTION_TYPE, "Leg2OptionType", 2),
+        _number(LEG2_CA_LEVEL, "Leg2CALevel"),
+        FieldDef(LEG2_BUY_SELL, "Leg2BuySell", FieldType.STRING,
+                 values=(NOT_SET, BuySell.BUY, BuySell.SELL),
+                 labels=_with_not_set(enum_labels(BuySell))),
+        _number(LEG2_DISCLOSED_VOL, "Leg2DisclosedVolume"),
+        _number(LEG2_DISCLOSED_VOL_REMAINING, "Leg2DisclosedVolumeRemaining"),
+        _number(LEG2_TOTAL_VOL_REMAINING, "Leg2TotalVolumeRemaining"),
+        _number(LEG2_VOLUME, "Leg2Volume"),
+        _number(LEG2_VOLUME_FILLED_TODAY, "Leg2VolumeFilledToday"),
+        FieldDef(LEG2_PRICE, "Leg2Price", FieldType.PRICE,
+                 max_decimals=PRICE_DECIMALS),
+        FieldDef(LEG2_TRIGGER_PRICE, "Leg2TriggerPrice", FieldType.PRICE,
+                 max_decimals=PRICE_DECIMALS),
+        _number(LEG2_MIN_FILL_AON, "Leg2MinimumFillOrAon"),
+        _text(LEG2_OPEN_CLOSE, "Leg2OpenClose", 1),
+        _number(LEG2_ORDER_TYPE, "Leg2OrderType"),
+
         _number(DOWNLOAD_SEQUENCE, "DownloadSequence"),
         _text(DOWNLOAD_DATA, "Data"),
 
@@ -714,6 +769,17 @@ _ORDER_TAGS = _CONTRACT_TAGS + (
     FLAG_BOC, FLAG_COL, FLAG_STPC_ADDITIONAL,
 )
 
+#: The spread structure is the plain order structure plus a price difference
+#: and a second leg, so its tag set is too.
+_SPREAD_TAGS = _ORDER_TAGS + (
+    PRICE_DIFF, LEG2_TOKEN_NO, LEG2_INSTRUMENT_NAME, LEG2_SYMBOL,
+    LEG2_EXPIRY_DATE, LEG2_STRIKE_PRICE, LEG2_OPTION_TYPE, LEG2_CA_LEVEL,
+    LEG2_BUY_SELL, LEG2_DISCLOSED_VOL, LEG2_DISCLOSED_VOL_REMAINING,
+    LEG2_TOTAL_VOL_REMAINING, LEG2_VOLUME, LEG2_VOLUME_FILLED_TODAY,
+    LEG2_PRICE, LEG2_TRIGGER_PRICE, LEG2_MIN_FILL_AON, LEG2_OPEN_CLOSE,
+    LEG2_ORDER_TYPE,
+)
+
 _PRICE_MOD_TAGS = (
     TOKEN_NO, TRADER_ID, ORDER_NUMBER, BUY_SELL, PRICE, VOLUME, LAST_MODIFIED,
     REFERENCE, LAST_ACTIVITY_REFERENCE,
@@ -804,6 +870,39 @@ def application_messages():
         _message(X.PRICE_CONFIRMATION, "MS_OE_REQUEST", _ORDER_TAGS,
                  inbound=False),
         _message(X.PRICE_MOD_IN, "PRICE_MOD", _PRICE_MOD_TAGS),
+
+        # -- spread orders --------------------------------------------------
+        _message(X.SP_BOARD_LOT_IN, "MS_SPD_OE_REQUEST", _SPREAD_TAGS),
+        _message(X.SP_ORDER_MOD_IN, "MS_SPD_OE_REQUEST", _SPREAD_TAGS),
+        _message(X.SP_ORDER_CANCEL_IN, "MS_SPD_OE_REQUEST", _SPREAD_TAGS),
+        _message(X.SP_ORDER_CONFIRMATION, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.SP_ORDER_MOD_CON_OUT, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.SP_ORDER_CXL_CONFIRMATION, "MS_SPD_OE_REQUEST",
+                 _SPREAD_TAGS, inbound=False),
+        _message(X.SP_ORDER_ERROR, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.SP_ORDER_MOD_REJ_OUT, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.SP_ORDER_CXL_REJ_OUT, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.BATCH_SPREAD_CXL_OUT, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.TWOL_BOARD_LOT_IN, "MS_SPD_OE_REQUEST", _SPREAD_TAGS),
+        _message(X.THRL_BOARD_LOT_IN, "MS_SPD_OE_REQUEST", _SPREAD_TAGS),
+        _message(X.TWOL_ORDER_CONFIRMATION, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.THRL_ORDER_CONFIRMATION, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.TWOL_ORDER_CXL_CONFIRMATION, "MS_SPD_OE_REQUEST",
+                 _SPREAD_TAGS, inbound=False),
+        _message(X.THRL_ORDER_CXL_CONFIRMATION, "MS_SPD_OE_REQUEST",
+                 _SPREAD_TAGS, inbound=False),
+        _message(X.TWOL_ORDER_ERROR, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
+        _message(X.THRL_ORDER_ERROR, "MS_SPD_OE_REQUEST", _SPREAD_TAGS,
+                 inbound=False),
 
         # -- the trimmed order flow -----------------------------------------
         #

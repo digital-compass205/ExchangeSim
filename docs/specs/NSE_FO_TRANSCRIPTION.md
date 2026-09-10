@@ -9,8 +9,16 @@ This is a **research document, not code**. It exists so Phase 1 can build `venue
 similar) the way `venues/nse/` was built from the CM spec, without re-reading the PDF from
 scratch. Everything is scoped to the same slice CM implements: the Regular Lot book of the
 Normal market, continuous trading, plus what a client needs to log on and receive trade reports.
-Spread/2L/3L orders, Stop Loss/MIT, Negotiated Trade, give-up, and the broadcast feed are
-identified but not transcribed field-by-field, per the task's scope.
+Stop Loss/MIT, Negotiated Trade, give-up and the broadcast feed are identified but not
+transcribed field-by-field, per the task's scope.
+
+**Spread orders were in that list and are not any more.** Chapter 5's
+`MS_SPD_OE_REQUEST` (480 bytes) and its nine transaction codes are transcribed and
+served: a spread is a calendar spread, two futures on one symbol with different
+expiries, quoted at `PriceDiff`. Byte for byte the plain 316-byte `MS_OE_REQUEST` **is**
+its first leg, so the structure is built from the plain fields rather than transcribed
+again. Two-leg and three-leg orders (2102/2104) share the structure and nothing else —
+`PriceDiff` "is not used for 2L/3L" — and remain refused by transaction code.
 
 `tools/pdftext.py` has no table model — it reconstructs a table from text-positioning operators,
 and multi-digit offsets that straddle two of the extractor's internal line breaks come out split,

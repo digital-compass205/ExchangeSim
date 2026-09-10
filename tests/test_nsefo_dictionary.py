@@ -41,6 +41,26 @@ PUBLISHED_SIZES = {
     # The trimmed order flow: a second, compact encoding of the same four
     # messages, and the shape a real gateway sends. None of these carries the
     # forty-byte MESSAGE_HEADER at all -- see layouts.py.
+    # Spread orders: nine codes and one 480-byte structure, plus the
+    # two-leg/three-leg family, which shares the structure and nothing else.
+    X.SP_BOARD_LOT_IN: 480,
+    X.SP_ORDER_MOD_IN: 480,
+    X.SP_ORDER_CANCEL_IN: 480,
+    X.SP_ORDER_CONFIRMATION: 480,
+    X.SP_ORDER_MOD_CON_OUT: 480,
+    X.SP_ORDER_CXL_CONFIRMATION: 480,
+    X.SP_ORDER_ERROR: 480,
+    X.SP_ORDER_MOD_REJ_OUT: 480,
+    X.SP_ORDER_CXL_REJ_OUT: 480,
+    X.BATCH_SPREAD_CXL_OUT: 480,
+    X.TWOL_BOARD_LOT_IN: 480,
+    X.THRL_BOARD_LOT_IN: 480,
+    X.TWOL_ORDER_CONFIRMATION: 480,
+    X.THRL_ORDER_CONFIRMATION: 480,
+    X.TWOL_ORDER_CXL_CONFIRMATION: 480,
+    X.THRL_ORDER_CXL_CONFIRMATION: 480,
+    X.TWOL_ORDER_ERROR: 480,
+    X.THRL_ORDER_ERROR: 480,
     X.BOARD_LOT_IN_TR: 158,
     X.ORDER_MOD_IN_TR: 186,
     X.ORDER_CANCEL_IN_TR: 186,

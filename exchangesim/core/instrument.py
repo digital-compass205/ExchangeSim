@@ -101,11 +101,11 @@ class Instrument(object):
 
     __slots__ = ("symbol", "name", "lot_size", "shares_outstanding",
                  "base_price", "tier", "band_table", "tick_table",
-                 "band_override", "tradable")
+                 "band_override", "tradable", "signed_price")
 
     def __init__(self, symbol, name="", lot_size=100, shares_outstanding=0,
                  base_price=None, tier=None, band_table=None, tick_table=None,
-                 tradable=True):
+                 tradable=True, signed_price=False):
         self.symbol = symbol
         self.name = name
         self.lot_size = lot_size or 1
@@ -119,6 +119,13 @@ class Instrument(object):
         #: Explicit (low, high) limits, overriding the table when set.
         self.band_override = None
         self.tradable = tradable
+        #: Whether this instrument's price is a *difference* rather than a
+        #: level, and so may be zero or negative. A spread combination is
+        #: quoted at the difference between its two legs, which is routinely
+        #: small and can be either sign -- so the ordinary "a price must be
+        #: positive" rule does not apply to it. Not a venue's quirk: every
+        #: exchange with a combination book has instruments of this shape.
+        self.signed_price = bool(signed_price)
 
     # -- derived limits ----------------------------------------------------
 

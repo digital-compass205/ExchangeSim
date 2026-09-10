@@ -35,6 +35,10 @@ SIDE_TO_CORE = {
 }
 SIDE_TO_WIRE = dict((core, wire) for wire, core in SIDE_TO_CORE.items())
 
+#: The other side, on the wire. A spread's second leg is always the opposite
+#: of its first: that is what makes it a spread rather than two orders.
+OPPOSITE_SIDE = {D.BuySell.BUY: D.BuySell.SELL, D.BuySell.SELL: D.BuySell.BUY}
+
 CAPACITY_TO_CORE = {
     D.ProClient.CLIENT: Capacity.AGENCY,
     D.ProClient.PRO: Capacity.PRINCIPAL,
@@ -467,7 +471,89 @@ def untrimmed(message):
     return recovered
 
 
+
+# -- spread orders -----------------------------------------------------------
+
+#: The spread flow's own responses, against the plain ones a report would
+#: otherwise carry. Read the same way ``TRIMMED_RESPONSES`` is: an order knows
+#: which family it belongs to, and every report about it uses that family.
+#: There is no spread trade confirmation code -- a spread match is reported as
+#: two ordinary ``TRADE_CONFIRMATION``s, one per leg, which is the whole point
+#: of a spread: the member ends up long one contract and short the other.
+SPREAD_RESPONSES = {
+    X.ORDER_CONFIRMATION: X.SP_ORDER_CONFIRMATION,
+    X.ORDER_MOD_CONFIRMATION: X.SP_ORDER_MOD_CON_OUT,
+    X.ORDER_CANCEL_CONFIRMATION: X.SP_ORDER_CXL_CONFIRMATION,
+    X.ORDER_ERROR: X.SP_ORDER_ERROR,
+    X.ORDER_MOD_REJECT: X.SP_ORDER_MOD_REJ_OUT,
+    X.ORDER_CANCEL_REJECT: X.SP_ORDER_CXL_REJ_OUT,
+}
+
+#: The requests, so a handler can tell which family a message belongs to.
+SPREAD_REQUESTS = frozenset((X.SP_BOARD_LOT_IN, X.SP_ORDER_MOD_IN,
+                             X.SP_ORDER_CANCEL_IN))
+
+#: The refusals the document names for a spread, every one from this venue's
+#: own error table. `e$expdate_not_in_ascending_ord` is worth pointing at: it
+#: is what settles the leg *order*, which nothing else in the document does.
+SPREAD_NOT_ALLOWED_HERE = 16607       # e$spread_not_allowed
+EITHER_LEG_FAILED = 16605             # e$either_leg_failed
+QTY_SHOULD_BE_SAME = 16610            # e$qty_should_be_same
+EXPIRY_NOT_ASCENDING = 16626          # e$expdate_not_in_ascending_ord
+INVALID_CONTRACT_COMBINATION = 16627  # e$invalid_contract_comb
+SPREAD_DIFFERENT_UNDERLYING = 16631   # e$spread_in_different_underlying
+
+#: "Currently Spread IOC orders are not allowed", said of the venue rather than
+#: of this simulator -- so it is refused with the code the document has for a
+#: spread that may not be entered, not with a "not implemented".
+SPREAD_IOC_NOT_ALLOWED = 16607        # e$spread_not_allowed
+
+#: The two-leg and three-leg family. They share MS_SPD_OE_REQUEST and nothing
+#: else -- PriceDiff "is not used for 2L/3L" -- so they are refused by
+#: transaction code rather than half-served through the spread path.
+MULTI_LEG_CODE_ERRORS = {
+    X.TWOL_BOARD_LOT_IN: BAD_TRANSACTION_CODE,
+    X.THRL_BOARD_LOT_IN: BAD_TRANSACTION_CODE,
+}
+
+
+def spread_code(code, spread):
+    """Which of a response's codes to answer a spread order with."""
+    return SPREAD_RESPONSES.get(code, code) if spread else code
+
+
 ASSUMPTIONS = [
+    "A spread combination is an instrument in its own right here, with a "
+    "book of its own quoted at PriceDiff -- which is what lets the ordinary "
+    "engine match one, since price-time priority on a difference is still "
+    "price-time priority. Its price may be zero or negative, which is the "
+    "one capability the core lacked (Instrument.signed_price): a calendar "
+    "spread routinely trades through zero, and 'a price must be positive' "
+    "is a rule about levels, not gaps.",
+
+    "Only the price *difference* is agreed by the two members; the levels "
+    "the two legs trade at are the exchange's to pick, and this document "
+    "does not say how -- it is a trading-rules matter rather than a "
+    "protocol one. Leg one is deemed to trade at its own reference price "
+    "and leg two at that plus the matched difference: deterministic, "
+    "needing no state, and exact in the one number the members actually "
+    "traded on. See handlers._leg_prices.",
+
+    "The operating range a spread's difference must fall inside is given "
+    "per combination in reference/spreads.csv (range_low/range_high) "
+    "rather than as a percentage of a base price the way a contract's "
+    "circuit filter is. A percentage of a difference that is near zero "
+    "says nothing, and 'the operating range' is what the document calls "
+    "it. The combinations themselves are UNVERIFIED sample data, like the "
+    "contract universe beside them.",
+
+    "A spread's second leg is always the opposite side of its first. The "
+    "document does not say so in a sentence, but it is what a spread is, "
+    "and it is what makes one match consistent: two orders that cross on "
+    "the difference then have mirrored legs, so each side can be told a "
+    "trade in each contract. Leg two's BuySell is set from leg one's "
+    "rather than echoed back.",
+
     "The trimmed (_TR) order flow is served alongside the plain 316-byte "
     "structures, and a client is answered in the encoding it asked in -- read "
     "off the *order* rather than off the request, so that a trade confirmation "
@@ -570,6 +656,26 @@ ASSUMPTIONS = [
 
 #: Flows that are deliberately unbuilt, and refused rather than half-simulated.
 NOT_IMPLEMENTED = [
+    "Two-leg and three-leg orders (TWOL_BOARD_LOT_IN 2102, "
+    "THRL_BOARD_LOT_IN 2104). They share MS_SPD_OE_REQUEST with the "
+    "spread flow and nothing else: PriceDiff 'is not used for 2L/3L', so "
+    "the one field that gives a spread its price means nothing to them, "
+    "and they are a different instrument wearing the same envelope. They "
+    "decode cleanly and are refused by transaction code rather than "
+    "half-served through the spread path.",
+
+    "The Special Terms book for spreads, which takes All Or None orders "
+    "('in this case, only orders with All or None (AON) attribute are "
+    "allowed'). This venue implements no AON at all, so a spread on any "
+    "book but Regular Lot is refused with e$invalid_book_type.",
+
+    "The Spread Combination master broadcast (BCAST_SPD_MSTR_CHG 7309) "
+    "and the spread MBP feed (MS_SPD_MKT_INFO), both of which are "
+    "broadcast rather than interactive -- and the broadcast feed as a "
+    "whole is LZO-compressed and out of reach under this project's "
+    "standard-library-only constraint. The combination file is read from "
+    "reference/spreads.csv at start-up instead.",
+
     "Chapter 15's immediate order acknowledgement (TRIMMED_BOARD_LOT_ACK_IN "
     "20400, TRIMMED_ORDER_MOD_ACK_IN 20402, TRIMMED_ORDER_CANCEL_ACK_IN "
     "20404 and the 22-byte MS_ACK_RESPONSE they are answered with). A "

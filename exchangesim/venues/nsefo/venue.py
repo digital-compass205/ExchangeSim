@@ -162,6 +162,55 @@ class Contract(object):
                self.strike_text, self.option_type)
 
 
+
+class SpreadCombination(object):
+    """One valid spread: two futures on the same symbol, different expiries.
+
+    A combination is an instrument in its own right here, with a canonical
+    name, a book and a price -- and the price is a *difference*, "the
+    difference between the prices at which leg2 and leg1 should trade", which
+    is why its instrument carries ``signed_price``. That is the whole reason a
+    spread can be matched by the ordinary engine: once the difference is the
+    price, price-time priority on a difference is price-time priority.
+
+    Leg order is fixed by expiry, nearer first. The document does not say so,
+    but it must be fixed by *something*: PriceDiff is defined leg2-minus-leg1,
+    so two members quoting the same combination in opposite leg orders would
+    quote the same market at opposite signs. See ``rules.ASSUMPTIONS``.
+    """
+
+    __slots__ = ("canonical", "near", "far", "base_diff", "range_low",
+                 "range_high")
+
+    def __init__(self, canonical, near, far, base_diff, range_low,
+                 range_high):
+        self.canonical = canonical
+        #: :class:`Contract` for each leg. ``near`` is leg 1.
+        self.near = near
+        self.far = far
+        self.base_diff = base_diff
+        self.range_low = range_low
+        self.range_high = range_high
+
+    def leg(self, index):
+        return self.near if index == 1 else self.far
+
+    def describe(self):
+        return {"symbol": self.canonical,
+                "near": self.near.canonical,
+                "far": self.far.canonical}
+
+    def __repr__(self):
+        return "SpreadCombination(%s)" % self.canonical
+
+
+def _spread_name(near, far):
+    """``NIFTY-FUTIDX-24SEP2026/29OCT2026`` -- the near leg, then the far
+    expiry alone. Long enough to be unambiguous, short enough to read, and it
+    sorts next to the legs it is made of."""
+    return "%s/%s" % (near.canonical, far.canonical.rsplit("-", 1)[-1])
+
+
 def _expiry_parts(iso_date):
     year, month, day = iso_date.split("-")
     return int(year), int(month), int(day)
@@ -262,6 +311,8 @@ class NsefoVenue(Venue):
 
         self.instruments = {}          # canonical name -> Instrument
         self._contracts = {}           # canonical name -> Contract
+        self._spreads = {}             # canonical name -> SpreadCombination
+        self._spread_legs = {}         # (near, far) canonical -> combination
         self._by_wire_key = {}         # Contract.wire_key() -> canonical name
         self._aliases = {}             # normalized alias -> canonical name
         self._partial = {}             # normalized partial key -> {canonical}
@@ -360,8 +411,123 @@ class NsefoVenue(Venue):
         self._contracts.clear()
         self._contracts.update(contracts)
         self._index_contracts()
-        log.info("venue '%s' loaded %d contracts", self.name,
-                len(self.instruments))
+        contract_count = len(self.instruments)
+
+        # After the contracts, and from them: a combination is defined by the
+        # two listed futures it joins, so it cannot be built until they are.
+        spread_instruments, combinations = self._read_spreads(contracts)
+        self.instruments.update(spread_instruments)
+        self._spreads = combinations
+        self._spread_legs = {
+            (combination.near.canonical, combination.far.canonical):
+                combination
+            for combination in combinations.values()}
+        log.info("venue '%s' loaded %d contracts and %d spread combinations",
+                self.name, contract_count, len(combinations))
+
+
+    def _read_spreads(self, contracts):
+        """The Spread Combination file: which pairs may be spread, and how far.
+
+        Returns ``(instruments, combinations)`` keyed by canonical name, the
+        same shape ``_read_reference_data`` uses, so the two load the same way.
+        """
+        default_dir = os.path.join(os.path.dirname(__file__), "reference")
+        path = self.config.resolve_path("reference.spreads") or \
+            os.path.join(default_dir, "spreads.csv")
+        if not os.path.exists(path):
+            return {}, {}
+        required = ("instrument_name", "symbol", "near_expiry", "far_expiry",
+                    "base_diff", "range_low", "range_high")
+        try:
+            rows = read_rows(path, required)
+        except ReferenceDataError as exc:
+            raise ConfigError("F&O spread combinations: %s" % exc)
+
+        instruments, combinations = {}, {}
+        for row in rows:
+            try:
+                combination, instrument = self._build_spread(row, contracts)
+            except (ValueError, ReferenceDataError) as exc:
+                raise ConfigError("F&O spread combinations (%s): %s"
+                                  % (path, exc))
+            if combination.canonical in combinations:
+                raise ConfigError(
+                    "F&O spread combinations (%s): duplicate combination '%s'"
+                    % (path, combination.canonical))
+            combinations[combination.canonical] = combination
+            instruments[combination.canonical] = instrument
+        return instruments, combinations
+
+    def _build_spread(self, row, contracts):
+        instrument_name = row["instrument_name"].strip().upper()
+        symbol = row["symbol"].strip().upper()
+        legs = []
+        for column in ("near_expiry", "far_expiry"):
+            canonical = _canonical_name(
+                symbol, instrument_name,
+                _expiry_display(row[column].strip()), "-1", "XX")
+            contract = contracts.get(canonical)
+            if contract is None:
+                raise ReferenceDataError(
+                    "leg '%s' is not a listed contract" % canonical)
+            if not contract.is_future:
+                raise ReferenceDataError(
+                    "leg '%s' is not a future; spread day orders are allowed "
+                    "only on future contracts" % canonical)
+            legs.append(contract)
+
+        near, far = legs
+        if near.expiry_seconds == far.expiry_seconds:
+            raise ReferenceDataError(
+                "both legs of '%s' have the same expiry" % near.canonical)
+        if near.expiry_seconds > far.expiry_seconds:
+            raise ReferenceDataError(
+                "near_expiry is later than far_expiry for %s" % symbol)
+
+        # A combination trades in its legs' lot and moves in its legs' tick,
+        # so a disagreement between the two legs is a configuration error
+        # rather than something to pick a winner from.
+        near_leg = self.instruments[near.canonical]
+        far_leg = self.instruments[far.canonical]
+        if near_leg.lot_size != far_leg.lot_size:
+            raise ReferenceDataError(
+                "legs of %s have different lot sizes (%d and %d)"
+                % (symbol, near_leg.lot_size, far_leg.lot_size))
+
+        canonical = _spread_name(near, far)
+        combination = SpreadCombination(
+            canonical, near, far,
+            base_diff=self.codec.parse(row["base_diff"]),
+            range_low=self.codec.parse(row["range_low"]),
+            range_high=self.codec.parse(row["range_high"]))
+
+        instrument = Instrument(
+            symbol=canonical, name=canonical, lot_size=near_leg.lot_size,
+            base_price=combination.base_diff,
+            tick_table=near_leg.tick_table, signed_price=True)
+        # "Spread day orders on eligible spread combinations with price
+        # difference within the operating range, will be allowed." An explicit
+        # range rather than a percentage band: a percentage of a difference
+        # that is near zero says nothing, and the range is what the document
+        # names.
+        instrument.band_override = (combination.range_low,
+                                    combination.range_high)
+        return combination, instrument
+
+    # -- spreads -----------------------------------------------------------
+
+    def spread_for(self, canonical):
+        """The combination a canonical name refers to, or None."""
+        return self._spreads.get(canonical)
+
+    def spread_by_legs(self, near_canonical, far_canonical):
+        """The combination two contracts form, or None if they form none."""
+        return self._spread_legs.get((near_canonical, far_canonical))
+
+    @property
+    def spreads(self):
+        return dict(self._spreads)
 
     def reload_reference_data(self):
         instruments, contracts = self._read_reference_data()

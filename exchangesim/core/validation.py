@@ -267,7 +267,10 @@ class StandardValidator(object):
         return None
 
     def _check_price(self, order, instrument, price):
-        if price <= 0:
+        # A price is a level and must be positive -- unless the instrument
+        # says it is a *difference*, which a spread combination's is: quoted
+        # at the gap between its two legs, routinely small and of either sign.
+        if price <= 0 and not instrument.signed_price:
             return Rejection(RejectReason.INVALID_PRICE, "price must be positive")
 
         if self.limits.require_tick and not instrument.is_on_tick(price):

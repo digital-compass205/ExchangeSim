@@ -669,6 +669,70 @@ def _define_trimmed(layouts):
     layouts.define(X.TRADE_CONFIRMATION_TR, "MS_TRADE_CONFIRM_TR", 230,
                    _trade_confirm_tr_fields(), header=HEADER_TRADE_TR)
 
+
+def _spread_leg_fields(offset):
+    """``MS_SPD_LEG_INFO``, Table 33 -- 80 bytes, the spread's second leg.
+
+    The same order fields as leg one, in their own compact arrangement: no
+    forty-byte header, no account or broker of its own (those are the spread
+    order's), and no GoodTillDate. Leg three occupies another eighty bytes
+    that a spread never fills -- "For spread order entry leg3 is not filled" --
+    and is declared reserved rather than given tags nothing would set.
+    """
+    return (
+        L.Field(D.LEG2_TOKEN_NO, "Token2", T.LONG, offset),
+        L.Field(D.LEG2_INSTRUMENT_NAME, "InstrumentName2", T.Char(6),
+                offset + 4),
+        L.Field(D.LEG2_SYMBOL, "Symbol2", T.Char(10), offset + 10),
+        L.Field(D.LEG2_EXPIRY_DATE, "ExpiryDate2", T.LONG, offset + 20),
+        L.Field(D.LEG2_STRIKE_PRICE, "StrikePrice2", T.LONG, offset + 24,
+                STRIKE),
+        L.Field(D.LEG2_OPTION_TYPE, "OptionType2", T.Char(2), offset + 28),
+        L.Field(D.LEG2_CA_LEVEL, "CALevel2", T.SHORT, offset + 30),
+        L.Reserved(offset + 32, 5, "OpBrokerId2"),
+        L.Reserved(offset + 37, 1, "Fillerx2"),
+        L.Field(D.LEG2_ORDER_TYPE, "OrderType2", T.SHORT, offset + 38),
+        L.Field(D.LEG2_BUY_SELL, "BuySell2", T.SHORT, offset + 40),
+        L.Field(D.LEG2_DISCLOSED_VOL, "DisclosedVol2", T.LONG, offset + 42),
+        L.Field(D.LEG2_DISCLOSED_VOL_REMAINING, "DisclosedVolRemaining2",
+                T.LONG, offset + 46),
+        L.Field(D.LEG2_TOTAL_VOL_REMAINING, "TotalVolRemaining2", T.LONG,
+                offset + 50),
+        L.Field(D.LEG2_VOLUME, "Volume2", T.LONG, offset + 54),
+        L.Field(D.LEG2_VOLUME_FILLED_TODAY, "VolumeFilledToday2", T.LONG,
+                offset + 58),
+        L.Field(D.LEG2_PRICE, "Price2", T.LONG, offset + 62, PAISE),
+        L.Field(D.LEG2_TRIGGER_PRICE, "TriggerPrice2", T.LONG, offset + 66,
+                PAISE),
+        L.Field(D.LEG2_MIN_FILL_AON, "MinFillAon2", T.LONG, offset + 70),
+        L.Reserved(offset + 74, 2, "ST_ORDER_FLAGS"),
+        L.Field(D.LEG2_OPEN_CLOSE, "OpenClose2", T.Char(1), offset + 76),
+        L.Reserved(offset + 77, 1, "ADDITIONAL_ORDER_FLAGS"),
+        L.Reserved(offset + 78, 1),
+        L.Reserved(offset + 79, 1, "FillerY"),
+    )
+
+
+def _spread_request_fields():
+    """``MS_SPD_OE_REQUEST``, Table 32 -- 480 bytes.
+
+    Byte for byte, the plain 316-byte order structure *is* this structure's
+    first leg: every field lines up, and the handful the spread renames
+    (StartAlpha1/EndAlpha1 over a reserved run, FillerOptions1 over
+    CloseoutFlag) are reserved on one side or the other. So it is built from
+    the plain fields rather than transcribed again -- the two cannot drift,
+    and a leg of a spread really is an ordinary order.
+
+    Then the price difference at 316, and two leg blocks. Only the first of
+    those is ever filled.
+    """
+    return _order_request_fields() + (
+        L.Field(D.PRICE_DIFF, "PriceDiff", T.LONG, 316, PAISE),
+    ) + _spread_leg_fields(320) + (
+        L.Reserved(400, 80, "MS_SPD_LEG_INFO (leg 3)"),
+    )
+
+
 def build_fo():
     """Every Futures & Options structure, by transaction code."""
     layouts = L.NnfDictionary(HEADER)
@@ -773,6 +837,24 @@ def build_fo():
     layouts.define(X.HEADER_RECORD, "MESSAGE_HEADER", 40, ())
     layouts.define(X.TRAILER_RECORD, "MESSAGE_HEADER", 40, ())
     layouts.define_record(X.MESSAGE_RECORD, "MESSAGE_RECORD", D.DOWNLOAD_DATA)
+
+    # Spread orders: nine codes and one 480-byte structure, the same
+    # "one structure, many codes" pattern the plain order flow has.
+    for code in (X.SP_BOARD_LOT_IN, X.SP_ORDER_MOD_IN, X.SP_ORDER_CANCEL_IN,
+                 X.SP_ORDER_CONFIRMATION, X.SP_ORDER_MOD_CON_OUT,
+                 X.SP_ORDER_CXL_CONFIRMATION, X.SP_ORDER_ERROR,
+                 X.SP_ORDER_MOD_REJ_OUT, X.SP_ORDER_CXL_REJ_OUT,
+                 X.BATCH_SPREAD_CXL_OUT,
+                 # The two- and three-leg family shares the structure and
+                 # nothing else, so it decodes here and is refused above --
+                 # a message this venue can read and will not serve.
+                 X.TWOL_BOARD_LOT_IN, X.THRL_BOARD_LOT_IN,
+                 X.TWOL_ORDER_CONFIRMATION, X.THRL_ORDER_CONFIRMATION,
+                 X.TWOL_ORDER_CXL_CONFIRMATION,
+                 X.THRL_ORDER_CXL_CONFIRMATION,
+                 X.TWOL_ORDER_ERROR, X.THRL_ORDER_ERROR):
+        layouts.define(code, "MS_SPD_OE_REQUEST", 480,
+                       _spread_request_fields())
 
     _define_trimmed(layouts)
 

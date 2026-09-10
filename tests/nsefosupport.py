@@ -45,6 +45,25 @@ OPTION = {
 }
 OPTION_CANONICAL = "RELIANCE-OPTSTK-24SEP2026-2500-CE"
 
+#: The spread combination NIFTY-FUTIDX-24SEP2026/29OCT2026, from
+#: reference/spreads.csv: base difference 50.00, operating range -200 to 300.
+#: Its legs are the two nearest NIFTY futures, and a spread is quoted at the
+#: gap between them rather than at a price of its own.
+NEAR_FUTURE = FUTURE
+NEAR_CANONICAL = FUTURE_CANONICAL
+FAR_FUTURE = dict(FUTURE, expiry="2026-10-29")
+FAR_CANONICAL = "NIFTY-FUTIDX-29OCT2026"
+SPREAD_CANONICAL = "NIFTY-FUTIDX-24SEP2026/29OCT2026"
+
+#: A listed NIFTY future that is in no combination at all. Used to show that
+#: two listed futures of one symbol are not automatically a spread -- "valid
+#: spread combinations will be pre-defined in the Spread Combination Contract
+#: file", and this one is not in it.
+UNCOMBINED_FUTURE = dict(FUTURE, expiry="2026-12-31")
+
+#: A future on another underlying, for the different-symbol refusal.
+OTHER_SYMBOL_FUTURE = dict(FUTURE, symbol="BANKNIFTY", expiry="2026-10-29")
+
 BOX_ONE = 101
 BOX_TWO = 102
 BROKER_ONE = "10123"
@@ -267,6 +286,62 @@ class BoxClient(object):
         if price is not None:
             fields[D.PRICE] = price
         return self.send(X.ORDER_MOD_IN_TR, fields, user_id=user_id)
+
+    # -- spread orders ----------------------------------------------------
+
+    def _leg2_fields(self, contract):
+        return {
+            D.LEG2_INSTRUMENT_NAME: contract["instrument_name"],
+            D.LEG2_SYMBOL: contract["symbol"],
+            D.LEG2_EXPIRY_DATE: _expiry_seconds(contract["expiry"]),
+            D.LEG2_STRIKE_PRICE: contract.get("strike") or "-1",
+            D.LEG2_OPTION_TYPE: contract["option_type"],
+        }
+
+    def spread_order(self, user_id, side=D.BuySell.BUY, quantity=25,
+                     difference="50.00", near=None, far=None, extra=None,
+                     code=None):
+        """One spread order: two legs and the difference between them."""
+        near = near or NEAR_FUTURE
+        far = far or FAR_FUTURE
+        fields = self._contract_fields(near)
+        fields.update(self._leg2_fields(far))
+        fields.update({
+            D.BOOK_TYPE: D.BookType.REGULAR_LOT,
+            D.BUY_SELL: side,
+            D.LEG2_BUY_SELL: (D.BuySell.SELL if side == D.BuySell.BUY
+                              else D.BuySell.BUY),
+            D.VOLUME: quantity,
+            D.LEG2_VOLUME: quantity,
+            D.PRO_CLIENT: D.ProClient.CLIENT,
+            D.ACCOUNT_NUMBER: "CLIENT%d" % user_id,
+            D.BROKER_ID: self.broker_id,
+            D.FLAG_DAY: "Y",
+        })
+        if difference is not None:
+            fields[D.PRICE_DIFF] = difference
+        fields.update(extra or {})
+        return self.send(code or X.SP_BOARD_LOT_IN, fields, user_id=user_id)
+
+    def spread_cancel(self, user_id, order_number):
+        fields = self._contract_fields(NEAR_FUTURE)
+        fields.update(self._leg2_fields(FAR_FUTURE))
+        fields.update({D.ORDER_NUMBER: order_number,
+                       D.BOOK_TYPE: D.BookType.REGULAR_LOT})
+        return self.send(X.SP_ORDER_CANCEL_IN, fields, user_id=user_id)
+
+    def spread_modify(self, user_id, order_number, quantity=None,
+                      difference=None):
+        fields = self._contract_fields(NEAR_FUTURE)
+        fields.update(self._leg2_fields(FAR_FUTURE))
+        fields.update({D.ORDER_NUMBER: order_number,
+                       D.BOOK_TYPE: D.BookType.REGULAR_LOT,
+                       D.FLAG_DAY: "Y"})
+        if quantity is not None:
+            fields[D.VOLUME] = quantity
+        if difference is not None:
+            fields[D.PRICE_DIFF] = difference
+        return self.send(X.SP_ORDER_MOD_IN, fields, user_id=user_id)
 
 
 class VenueHarness(object):

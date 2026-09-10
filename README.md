@@ -374,6 +374,19 @@ A refused trimmed order comes back as its confirmation code with a non-zero
 `ErrorCode`, because the appendix publishes no trimmed `ORDER_ERROR`. Spread,
 two-leg and three-leg orders are not trimmed and are not supported.
 
+**Spread orders** are their own flow: `SP_BOARD_LOT_IN (2100)` and the eight
+codes around it, all sharing one 480-byte `MS_SPD_OE_REQUEST`, and none of
+them trimmed. A spread is a calendar spread — two futures on one symbol with
+different expiries, the nearer first — quoted at `PriceDiff`, the gap between
+the legs, which may be negative. Valid pairs come from
+`venues/nsefo/reference/spreads.csv`, the Spread Combination file; a pair of
+listed futures is not automatically a spread. A match is reported as **two**
+`TRADE_CONFIRMATION`s, one per leg, since that is what you end up holding: the
+levels are the venue's to pick, the difference between them is what you
+traded. IOC, GTC/GTD, disclosed quantity and a Special Terms book are refused,
+as are two-leg and three-leg orders, which share the structure and nothing
+else.
+
 There is no resend. A report produced while a user was signed off is dropped
 rather than queued, and the client gets it back by asking: **`DOWNLOAD_REQUEST`
 (7000)** names a stream in the header's `AlphaChar` and a cursor in

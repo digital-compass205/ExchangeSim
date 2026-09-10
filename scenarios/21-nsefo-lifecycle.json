@@ -527,6 +527,357 @@
       }
     },
     {
+      "comment": "SPREAD orders -- Chapter 5. 'Spread order is a combination of two normal orders on two contracts with same symbol and different expiry dates', quoted at the DIFFERENCE between the two legs rather than at a price of its own. That difference is 9700 (PriceDiff); 55/9410/9411 name leg one and 9703/9702/9704 leg two, and the structure is 480 bytes, the plain 316-byte order as its first leg plus the difference plus two 80-byte legs. Note these are NOT trimmed: 2100, not 20100."
+    },
+    {
+      "send": "one",
+      "fields": {
+        "35": "2100",
+        "9403": "0",
+        "9402": "50521",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1474675200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1477699200",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "1",
+        "9708": "2",
+        "38": "25",
+        "9712": "25",
+        "9700": "50.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10123",
+        "9624": "Y"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2124",
+        "9403": "0",
+        "9402": "50521",
+        "9700": "50.00",
+        "55": "NIFTY",
+        "9703": "NIFTY",
+        "9411": "1474675200",
+        "9704": "1477699200"
+      },
+      "capture": {
+        "spread_order": "37"
+      }
+    },
+    {
+      "comment": "Modification changes the difference and the quantity, and nothing else about a spread may move: 'Change in price difference and quantity will be allowed.'"
+    },
+    {
+      "send": "one",
+      "fields": {
+        "35": "2118",
+        "9403": "0",
+        "9402": "50521",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1474675200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1477699200",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "1",
+        "9708": "2",
+        "38": "50",
+        "9712": "50",
+        "9700": "60.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10123",
+        "9624": "Y",
+        "37": "$spread_order"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2136",
+        "9403": "0",
+        "9700": "60.00",
+        "38": "50"
+      }
+    },
+    {
+      "comment": "Legs the wrong way round. PriceDiff is 'the difference between the prices at which leg2 and leg1 should trade', so the leg order fixes the sign of the whole market -- and the document has a code for exactly this, 16626 e$expdate_not_in_ascending_ord, which is what says the ordering is its rule and not this simulator's."
+    },
+    {
+      "send": "one",
+      "fields": {
+        "35": "2100",
+        "9403": "0",
+        "9402": "50521",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1477699200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1474675200",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "1",
+        "9708": "2",
+        "38": "25",
+        "9712": "25",
+        "9700": "50.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10123",
+        "9624": "Y"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2154",
+        "9403": "16626"
+      }
+    },
+    {
+      "comment": "A pair of listed futures is not automatically a spread: 'valid spread combinations will be pre-defined in the Spread Combination Contract file'. 31DEC2026 is listed and is in no combination. 16627 is e$invalid_contract_comb."
+    },
+    {
+      "send": "one",
+      "fields": {
+        "35": "2100",
+        "9403": "0",
+        "9402": "50521",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1474675200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1483142400",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "1",
+        "9708": "2",
+        "38": "25",
+        "9712": "25",
+        "9700": "50.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10123",
+        "9624": "Y"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2154",
+        "9403": "16627"
+      }
+    },
+    {
+      "comment": "'Currently Spread IOC orders are not allowed.'"
+    },
+    {
+      "send": "one",
+      "fields": {
+        "35": "2100",
+        "9403": "0",
+        "9402": "50521",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1474675200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1477699200",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "1",
+        "9708": "2",
+        "38": "25",
+        "9712": "25",
+        "9700": "50.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10123",
+        "9624": "N",
+        "9626": "Y"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2154",
+        "9403": "16607"
+      }
+    },
+    {
+      "comment": "Two-leg and three-leg orders share MS_SPD_OE_REQUEST and nothing else -- PriceDiff 'is not used for 2L/3L' -- so they decode cleanly here and are refused by transaction code rather than half-served through the spread path."
+    },
+    {
+      "send": "one",
+      "fields": {
+        "35": "2102",
+        "9403": "0",
+        "9402": "50521",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1474675200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1477699200",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "1",
+        "9708": "2",
+        "38": "25",
+        "9712": "25",
+        "9700": "50.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10123",
+        "9624": "Y"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2154",
+        "9403": "16003"
+      }
+    },
+    {
+      "comment": "And the match: a second member takes the other side, and BOTH are told about it as a trade in each leg (2222 twice). There is no spread trade confirmation code in the appendix, and there should not be -- what a member ends up with is a position in each contract. Only the difference was agreed, so the levels are the exchange's to pick; what is exact is the gap between them."
+    },
+    {
+      "send": "one",
+      "fields": {
+        "35": "2100",
+        "9403": "0",
+        "9402": "50521",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1474675200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1477699200",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "1",
+        "9708": "2",
+        "38": "25",
+        "9712": "25",
+        "9700": "50.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10123",
+        "9624": "Y",
+        "37": "0"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2124",
+        "9403": "0"
+      }
+    },
+    {
+      "send": "two",
+      "fields": {
+        "35": "2100",
+        "9403": "0",
+        "9402": "50777",
+        "9410": "FUTIDX",
+        "55": "NIFTY",
+        "9411": "1474675200",
+        "9412": "-1",
+        "9413": "XX",
+        "9702": "FUTIDX",
+        "9703": "NIFTY",
+        "9704": "1477699200",
+        "9705": "-1",
+        "9706": "XX",
+        "9449": "1",
+        "54": "2",
+        "9708": "1",
+        "38": "25",
+        "9712": "25",
+        "9700": "50.00",
+        "9462": "1",
+        "1": "CLIENT001",
+        "9459": "10456",
+        "9624": "Y"
+      }
+    },
+    {
+      "expect": "two",
+      "fields": {
+        "35": "2124",
+        "9403": "0"
+      }
+    },
+    {
+      "expect": "two",
+      "fields": {
+        "35": "2222",
+        "9403": "0",
+        "9411": "1474675200",
+        "54": "2"
+      }
+    },
+    {
+      "expect": "two",
+      "fields": {
+        "35": "2222",
+        "9403": "0",
+        "9411": "1477699200",
+        "54": "1"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2222",
+        "9403": "0",
+        "9411": "1474675200",
+        "54": "1"
+      }
+    },
+    {
+      "expect": "one",
+      "fields": {
+        "35": "2222",
+        "9403": "0",
+        "9411": "1477699200",
+        "54": "2"
+      }
+    },
+    {
       "comment": "The TRIMMED order flow -- MS_OE_REQUEST_TR (20000) and its answers. This is what a real gateway sends: Chapter 11 says 'Only Trim-NNF protocol is supported by Direct Interface', and these structures do NOT carry the forty-byte MESSAGE_HEADER at all. MS_OE_REQUEST_TR opens with eight bytes -- transaction code, user id, reason code -- against the plain form's forty, and is 158 bytes to the plain 316. The one field they share is the one framing needs: the transaction code, a SHORT at offset 0. Both encodings are served and a client is answered in the one it asked in."
     },
     {

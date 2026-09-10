@@ -23,7 +23,7 @@ import logging
 
 from ...core.behaviour import DELAY, DROP
 from ...core.commands import CancelRequest, NewOrderRequest, ReplaceRequest
-from ...core.enums import CancelReason, OrderType, TradingState
+from ...core.enums import CancelReason, OrderType, Side, TradingState
 from ...core.prices import PriceError
 from ...fix.message import Message
 from ...nnf import types as WT
@@ -220,6 +220,184 @@ class NsefoApplication(Application):
             return True
         log.warning("refusing %s: %s", message.msg_type, failure.text)
         return False
+
+    # -- inbound: spread orders --------------------------------------------
+
+    def _on_spread_order(self, session, message):
+        """SP_BOARD_LOT_IN: one order on two contracts, priced at their gap.
+
+        "Spread order is a combination of two normal orders on two contracts
+        with same symbol and different expiry dates" -- so the combination is
+        an instrument here, with a book of its own quoted at ``PriceDiff``,
+        and everything below this line is the ordinary engine. What a spread
+        adds is entirely at the edges: which pairs are valid, and that one
+        match becomes two leg trades.
+        """
+        combination, error = self._combination(message)
+        if error is not None:
+            return self._spread_error(session, message, X.SP_ORDER_ERROR,
+                                      error)
+
+        error = self._spread_unsupported(message)
+        if error is not None:
+            return self._spread_error(session, message, X.SP_ORDER_ERROR,
+                                      error)
+
+        try:
+            price = self._price(message, D.PRICE_DIFF)
+        except PriceError:
+            return self._spread_error(session, message, X.SP_ORDER_ERROR,
+                                      rules.INVALID_ORDER_PARAM)
+
+        request = NewOrderRequest(
+            session_key=session.key,
+            market=self.venue.market_name,
+            cl_ord_id=None,
+            symbol=combination.canonical,
+            side=rules.SIDE_TO_CORE.get(message.get(D.BUY_SELL)),
+            quantity=message.get_int(D.VOLUME, 0),
+            price=price,
+            order_type=rules.order_type(message),
+            time_in_force=rules.time_in_force(message),
+            capacity=rules.CAPACITY_TO_CORE.get(message.get(D.PRO_CLIENT)),
+            account=message.get(D.ACCOUNT_NUMBER),
+            received_at=self.clock.now(),
+        )
+        events = self.engine.new_order(request)
+        self._remember(message, events)
+        self._emit(session, events)
+        return None
+
+    def _on_spread_modify(self, session, message):
+        """SP_ORDER_MOD_IN. "Change in price difference and quantity will be
+        allowed", and nothing else about a spread order may move."""
+        try:
+            price = self._price(message, D.PRICE_DIFF)
+        except PriceError:
+            return self._spread_error(session, message, X.SP_ORDER_MOD_REJ_OUT,
+                                      rules.INVALID_ORDER_PARAM)
+
+        error = self._spread_unsupported(message)
+        if error is not None:
+            return self._spread_error(session, message, X.SP_ORDER_MOD_REJ_OUT,
+                                      error)
+
+        request = ReplaceRequest(
+            session_key=session.key,
+            market=self.venue.market_name,
+            cl_ord_id=None,
+            orig_cl_ord_id=None,
+            order_id=self._order_number(message),
+            quantity=self._quantity(message, D.VOLUME),
+            price=price,
+            received_at=self.clock.now(),
+        )
+        events = self.engine.replace_order(request)
+        self._remember(message, events)
+        self._emit(session, events)
+        return None
+
+    def _on_spread_cancel(self, session, message):
+        request = CancelRequest(
+            session_key=session.key,
+            market=self.venue.market_name,
+            cl_ord_id=None,
+            orig_cl_ord_id=None,
+            order_id=self._order_number(message),
+            received_at=self.clock.now(),
+        )
+        events = self.engine.cancel_order(request)
+        self._remember(message, events)
+        self._emit(session, events)
+        return None
+
+    def _on_multi_leg(self, session, message):
+        """TWOL/THRL: the same envelope, a different instrument.
+
+        They share ``MS_SPD_OE_REQUEST`` with the spread flow, so they decode
+        cleanly and would be half-served if this fell through to the spread
+        path -- ``PriceDiff`` is "used for spread order only. It is not used
+        for 2L/3L", so the one field that gives a spread its price means
+        nothing here. Refused by transaction code instead.
+        """
+        return self._spread_error(session, message, X.SP_ORDER_ERROR,
+                                  rules.BAD_TRANSACTION_CODE)
+
+    # -- what makes a valid combination -------------------------------------
+
+    def _combination(self, message):
+        """The combination a spread order names, or the code that refuses it."""
+        near, error = self._contract(message)
+        if error is not None:
+            return None, error
+        far = self.venue.contract_by_wire(
+            message.get(D.LEG2_INSTRUMENT_NAME),
+            message.get(D.LEG2_SYMBOL),
+            message.get_int(D.LEG2_EXPIRY_DATE, 0),
+            message.get(D.LEG2_STRIKE_PRICE),
+            message.get(D.LEG2_OPTION_TYPE))
+        if far is None:
+            return None, 16012                  # ERR_INVALID_SYMBOL
+
+        first = self.venue.contract_for(near)
+        second = self.venue.contract_for(far)
+        if first.symbol != second.symbol:
+            return None, rules.SPREAD_DIFFERENT_UNDERLYING
+        if not (first.is_future and second.is_future):
+            # "Spread day orders will be allowed only on future contracts."
+            return None, rules.SPREAD_NOT_ALLOWED_HERE
+        if first.expiry_seconds >= second.expiry_seconds:
+            # Covers "both contracts of spread order having same expiry date"
+            # and the legs given the other way round -- which matters because
+            # PriceDiff is defined leg2-minus-leg1, so the leg order fixes the
+            # sign of the whole market. The document has a code for exactly
+            # this, which is what says the ordering is its rule and not ours.
+            return None, rules.EXPIRY_NOT_ASCENDING
+
+        combination = self.venue.spread_by_legs(near, far)
+        if combination is None:
+            return None, rules.INVALID_CONTRACT_COMBINATION
+
+        leg2_quantity = message.get_int(D.LEG2_VOLUME, 0)
+        if leg2_quantity and leg2_quantity != message.get_int(D.VOLUME, 0):
+            return None, rules.QTY_SHOULD_BE_SAME
+        return combination, None
+
+    def _spread_unsupported(self, message):
+        """What a spread order may not ask for.
+
+        Chapter 5 lists these itself rather than leaving them to the general
+        order rules: "The other conditions not allowed are: Disclosed
+        (Disclosed Quantity), Good Till Days (GTD), Good Till Cancelled (GTC),
+        IOC", and for the Special Terms book "Trigger Price (TP), Minimum Fill
+        (MF)" as well.
+        """
+        if message.get(D.FLAG_IOC) == "Y":
+            # "Currently Spread IOC orders are not allowed."
+            return rules.SPREAD_IOC_NOT_ALLOWED
+        if message.get(D.BOOK_TYPE) != rules.SUPPORTED_BOOK:
+            # Only Regular Lot here: the Special Terms book a spread may also
+            # use takes All Or None, which this venue does not implement at
+            # all -- see rules.NOT_IMPLEMENTED.
+            return 16406                        # e$invalid_book_type
+        return self._unsupported(message)
+
+    def _spread_error(self, session, message, code, error_code):
+        """Refuse a spread request by echoing it back with an error."""
+        reply = Message.create(str(code))
+        for tag, value in message.fields:
+            if tag not in (D.MESSAGE_LENGTH,):
+                reply.set(tag, value)
+        reply.set(D.TRANSACTION_CODE, str(code))
+        reply.set(D.ERROR_CODE, str(error_code))
+        reply.set(D.REASON_CODE, str(error_code))
+        reply.set(D.USER_ID, str(session.user_id))
+        reply.set(D.LOG_TIME, str(self._nse_seconds()))
+        session.send(reply)
+        log.info("user %s: %s refused with %s", session.target_comp_id,
+                 rules.describe_transaction(int(message.msg_type)),
+                 X.error_name(error_code))
+        return None
 
     # -- inbound: order entry ----------------------------------------------
 
@@ -506,13 +684,21 @@ class NsefoApplication(Application):
     def _code_for(self, order, code):
         """The transaction code a report about ``order`` goes out under.
 
-        The trimmed encoding if that is how the order arrived, and the plain
-        one otherwise. Read off the *order* rather than off the request being
-        answered, because a trade confirmation and a cancel on disconnect
-        answer no request at all.
+        Three families answer the same events -- plain, trimmed and spread --
+        and which one a report belongs to is read off the *order*, not off the
+        request being answered, because a trade confirmation and a cancel on
+        disconnect answer no request at all. A spread is decided by the
+        instrument, which cannot change; a trimmed order by how it arrived.
         """
+        if self._combination_of(order) is not None:
+            return rules.spread_code(code, True)
         order_id = getattr(order, "order_id", None)
         return rules.trimmed_code(code, order_id in self._trimmed)
+
+    def _combination_of(self, order):
+        """The spread combination an order is on, or None for an outright."""
+        symbol = getattr(order, "symbol", None)
+        return self.venue.spread_for(symbol) if symbol else None
 
     # -- outbound ----------------------------------------------------------
 
@@ -523,10 +709,11 @@ class NsefoApplication(Application):
                 continue
             order = getattr(event, "order", None)
             target = self._session_for(event, session)
-            if target is None:
-                self._retain(order, message)
-                continue
-            self._deliver(target, message, order)
+            for one in message if isinstance(message, list) else [message]:
+                if target is None:
+                    self._retain(order, one)
+                    continue
+                self._deliver(target, one, order)
         self._forget(events)
 
     def _session_for(self, event, fallback):
@@ -586,6 +773,9 @@ class NsefoApplication(Application):
     # -- contract identity on the wire --------------------------------------
 
     def _set_contract(self, message, canonical):
+        combination = self.venue.spread_for(canonical)
+        if combination is not None:
+            return self._set_legs(message, combination)
         contract = self.venue.contract_for(canonical)
         if contract is None:
             return
@@ -595,6 +785,36 @@ class NsefoApplication(Application):
         message.set(D.STRIKE_PRICE, contract.strike_text)
         message.set(D.OPTION_TYPE, contract.option_type)
         message.set(D.CA_LEVEL, "0")
+
+    def _set_legs(self, message, combination):
+        """Both contracts of a spread, leg one in the plain fields.
+
+        The spread structure's first leg *is* the plain order structure, so
+        leg one goes exactly where an outright contract goes and only leg two
+        needs fields of its own.
+        """
+        self._set_contract(message, combination.near.canonical)
+        far = combination.far
+        message.set(D.LEG2_SYMBOL, far.symbol)
+        message.set(D.LEG2_INSTRUMENT_NAME, far.instrument_name)
+        message.set(D.LEG2_EXPIRY_DATE, str(far.expiry_seconds))
+        message.set(D.LEG2_STRIKE_PRICE, far.strike_text)
+        message.set(D.LEG2_OPTION_TYPE, far.option_type)
+        message.set(D.LEG2_CA_LEVEL, "0")
+
+    def _leg_prices(self, combination, difference):
+        """What each leg trades at, given the difference the members agreed.
+
+        Only the difference is agreed; the levels are the exchange's to pick,
+        and this document does not say how (it is a trading-rules matter, not
+        a protocol one). ASSUMPTION: leg one trades at its own reference
+        price and leg two at that plus the matched difference -- deterministic,
+        needing no state, and exact in the one number the members actually
+        traded on. See rules.ASSUMPTIONS.
+        """
+        near = self.venue.instruments.get(combination.near.canonical)
+        base = near.base_price if near is not None else 0
+        return base, base + difference
 
     # -- reports -----------------------------------------------------------
 
@@ -620,7 +840,17 @@ class NsefoApplication(Application):
         message.set(D.VOLUME, str(order.quantity))
         message.set(D.TOTAL_VOL_REMAINING, str(order.leaves_qty))
         message.set(D.VOLUME_FILLED_TODAY, str(order.cum_qty))
-        if order.price is not None:
+        combination = self._combination_of(order)
+        if combination is not None and order.price is not None:
+            # "Price: This field contains zero for both the legs" -- a spread
+            # order's price is PriceDiff and nowhere else.
+            message.set(D.PRICE_DIFF, self.codec.format(order.price))
+            message.set(D.LEG2_VOLUME, str(order.quantity))
+            message.set(D.LEG2_TOTAL_VOL_REMAINING, str(order.leaves_qty))
+            message.set(D.LEG2_VOLUME_FILLED_TODAY, str(order.cum_qty))
+            message.set(D.LEG2_BUY_SELL, rules.OPPOSITE_SIDE.get(
+                rules.SIDE_TO_WIRE.get(order.side), D.BuySell.SELL))
+        elif order.price is not None:
             message.set(D.PRICE, self.codec.format(order.price))
         message.set(D.ACCOUNT_NUMBER, order.account or "")
         message.set(D.PRO_CLIENT, rules.CAPACITY_TO_WIRE.get(
@@ -661,27 +891,49 @@ class NsefoApplication(Application):
         return message
 
     def _render_filled(self, event):
-        """TRADE_CONFIRMATION, from the snapshot the event carries."""
+        """TRADE_CONFIRMATION, from the snapshot the event carries.
+
+        A spread fill renders *two* of them, one per leg. There is no spread
+        trade confirmation code in the appendix, and there should not be: what
+        a member ends up with is a position in each contract, so what they are
+        told is a trade in each contract. The one thing the two share is the
+        difference between their prices, which is what was agreed.
+        """
+        combination = self._combination_of(event.order)
+        if combination is not None:
+            return [self._render_leg_fill(event, combination, index)
+                    for index in (1, 2)]
+        return self._render_outright_fill(event, event.order.symbol,
+                                          event.price, event.order.side)
+
+    def _render_leg_fill(self, event, combination, index):
+        near_price, far_price = self._leg_prices(combination, event.price)
+        leg = combination.leg(index)
+        price = near_price if index == 1 else far_price
+        side = event.order.side if index == 1 else _other_side(event.order.side)
+        return self._render_outright_fill(event, leg.canonical, price, side)
+
+    def _render_outright_fill(self, event, symbol, price, side):
         order = event.order
-        message = Message.create(
-            str(self._code_for(order, X.TRADE_CONFIRMATION)))
+        message = Message.create(str(X.TRADE_CONFIRMATION
+                                     if self._combination_of(order) is not None
+                                     else self._code_for(
+                                         order, X.TRADE_CONFIRMATION)))
         message.set(D.ERROR_CODE, str(X.NO_ERROR))
         message.set(D.LOG_TIME, str(self._nse_seconds()))
         message.set(D.TIMESTAMP, str(self._nse_nanoseconds()))
 
-        self._set_contract(message, order.symbol)
+        self._set_contract(message, symbol)
 
         message.set(D.RESPONSE_ORDER_NUMBER, order.order_id)
         message.set(D.BOOK_TYPE, rules.SUPPORTED_BOOK)
-        message.set(D.BUY_SELL, rules.SIDE_TO_WIRE.get(order.side,
-                                                       D.BuySell.BUY))
+        message.set(D.BUY_SELL, rules.SIDE_TO_WIRE.get(side, D.BuySell.BUY))
         message.set(D.VOLUME, str(event.order_qty))
         message.set(D.TOTAL_VOL_REMAINING, str(event.leaves_qty))
         message.set(D.VOLUME_FILLED_TODAY, str(event.cum_qty))
         message.set(D.FILL_QTY, str(event.quantity))
-        message.set(D.FILL_PRICE, self.codec.format(event.price))
-        message.set(D.PRICE, self.codec.format(order.price)
-                    if order.price is not None else "0")
+        message.set(D.FILL_PRICE, self.codec.format(price))
+        message.set(D.PRICE, self.codec.format(price))
         message.set(D.FILL_NUMBER, str(event.trade_id))
         message.set(D.ACTIVITY_TYPE, rules.ACTIVITY_TRADE)
         message.set(D.ACTIVITY_TIME, str(self._nse_seconds()))
@@ -783,6 +1035,12 @@ def _epoch_seconds(when):
     return calendar.timegm(when.timetuple()) + when.microsecond / 1000000.0
 
 
+def _other_side(side):
+    """The other leg's side. A spread is a buy of one contract and a sell of
+    the other -- that is what makes it a spread rather than two orders."""
+    return Side.SELL if side == Side.BUY else Side.BUY
+
+
 def _int(value):
     try:
         return int(value)
@@ -852,6 +1110,13 @@ _HANDLERS = {
     # encodings -- the header, the offsets, the widths -- was settled by the
     # layout before a handler sees a Message. What each one *answers* in is
     # the difference, and that is `_trimmed` below.
+    # Spread orders: one order on two contracts, priced at their difference.
+    X.SP_BOARD_LOT_IN: NsefoApplication._on_spread_order,
+    X.SP_ORDER_MOD_IN: NsefoApplication._on_spread_modify,
+    X.SP_ORDER_CANCEL_IN: NsefoApplication._on_spread_cancel,
+    # Same envelope, different instrument -- refused rather than half-served.
+    X.TWOL_BOARD_LOT_IN: NsefoApplication._on_multi_leg,
+    X.THRL_BOARD_LOT_IN: NsefoApplication._on_multi_leg,
     X.BOARD_LOT_IN_TR: NsefoApplication._on_new_order,
     X.ORDER_MOD_IN_TR: NsefoApplication._on_modify,
     X.ORDER_CANCEL_IN_TR: NsefoApplication._on_cancel,

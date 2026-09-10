@@ -317,6 +317,37 @@ Chapter 15's immediate-acknowledgement codes (`TRIMMED_*_ACK_IN`) share these
 structures but are a *separate listener* on a separate Gateway Router port,
 and are unbuilt.
 
+**A spread combination is an instrument, which is what makes it matchable.**
+F&O's spread order is "a combination of two normal orders on two contracts
+with same symbol and different expiry dates", quoted at the *difference*
+between the legs. Model the combination as an instrument with a book of its
+own and the whole thing falls to the ordinary engine, because price-time
+priority on a difference is still price-time priority. What is left is at the
+edges, and all of it is the venue's:
+
+- **The core gained one thing: `Instrument.signed_price`.** A calendar spread
+  routinely trades through zero, and "a price must be positive" is a rule
+  about levels, not gaps. Not an NSE quirk — every exchange with a
+  combination book has instruments of this shape.
+- **One match becomes two trade confirmations**, one per leg, because that is
+  what a member ends up holding. There is no spread trade-confirmation code in
+  the appendix and there should not be. `_render_filled` may therefore return
+  a *list*, and `_emit` sends each.
+- **Only the difference is agreed; the levels are invented.** Leg one is
+  deemed to trade at its own reference price and leg two at that plus the
+  difference — an ASSUMPTION, and the exact number is the gap, which is the
+  only thing the members traded on.
+- **Leg order is fixed by expiry, and the document proves it** rather than
+  leaving it to be assumed: `PriceDiff` is leg2-minus-leg1, so the ordering
+  fixes the sign of the market, and the error table has
+  `e$expdate_not_in_ascending_ord` for getting it wrong.
+
+`MS_SPD_OE_REQUEST` is built *from* the plain order structure rather than
+transcribed again: byte for byte, the 316-byte `MS_OE_REQUEST` **is** its
+first leg, then `PriceDiff` at 316 and two 80-byte legs. Two-leg and
+three-leg orders share the envelope and nothing else — `PriceDiff` "is not
+used for 2L/3L" — so they decode and are refused by code.
+
 A future's `StrikePrice` is **-1**, not 0 -- the protocol breaking its own "zero
 means absent" rule, and the one place where reading the sibling document's
 convention across would be wrong.

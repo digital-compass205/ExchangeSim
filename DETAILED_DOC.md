@@ -945,6 +945,20 @@ built, and refused with a published error code rather than faked:
 - **trade modification and cancellation**, the freeze and approval flow, and
   market-wide index circuit breakers.
 
+**Spread orders trade on a book of their own.** F&O's spread is a calendar
+spread — "a combination of two normal orders on two contracts with same
+symbol and different expiry dates" — and it is quoted at `PriceDiff`, the gap
+between the legs. Modelled as an instrument, it needs no matching of its own:
+price-time priority on a difference is still price-time priority. The core
+gained exactly one thing for it, `Instrument.signed_price`, because a spread's
+price may be zero or negative and "a price must be positive" is a rule about
+levels. Valid pairs are read from `reference/spreads.csv`, the Spread
+Combination file; two listed futures are not automatically a spread. One match
+is reported as **two** `TRADE_CONFIRMATION`s, one per leg, and only the
+difference between their prices is exact — the levels are an ASSUMPTION the
+document leaves to trading rules. Two-leg and three-leg orders share the
+480-byte structure and nothing else, and are refused by transaction code.
+
 **Order entry is served in both published encodings.** The plain 316-byte
 `MS_OE_REQUEST` and the compact 158-byte `MS_OE_REQUEST_TR`, which carries no
 forty-byte header at all — and which is what a real gateway sends, Chapter 11

@@ -15,6 +15,13 @@ from exchangesim.venues.nsefo import rules
 from exchangesim.venues.nsefo import transactions as X
 
 from tests.nsefosupport import (
+    FAR_CANONICAL,
+    FAR_FUTURE,
+    NEAR_CANONICAL,
+    NEAR_FUTURE,
+    OTHER_SYMBOL_FUTURE,
+    SPREAD_CANONICAL,
+    UNCOMBINED_FUTURE,
     BOX_ONE,
     BOX_TWO,
     BROKER_ONE,
@@ -39,7 +46,12 @@ class VenueTest(unittest.TestCase):
         self.venue = self.harness.venue
 
     def test_the_universe_loads(self):
-        self.assertEqual(len(self.venue.instruments), 21)
+        # 22 listed contracts, plus one instrument per spread combination --
+        # a combination is a tradeable thing in its own right here, with a
+        # book of its own quoted at the gap between its two legs.
+        self.assertEqual(22 + len(self.venue.spreads),
+                         len(self.venue.instruments))
+        self.assertEqual(5, len(self.venue.spreads))
         self.assertIn(FUTURE_CANONICAL, self.venue.instruments)
         self.assertIn(OPTION_CANONICAL, self.venue.instruments)
 
@@ -403,25 +415,6 @@ class RefusalTest(unittest.TestCase):
         message = reports[-1]
         self.assertEqual(int(message.msg_type), X.ORDER_ERROR)
         self.assertEqual(int(message.get(D.ERROR_CODE)), 16012)
-
-    def test_spread_orders_are_refused(self):
-        self.client.clear()
-        self.client.raw(2100, user_id=USER_ONE)          # SP_BOARD_LOT_IN
-        reply = self.client.last()
-        self.assertEqual(int(reply.msg_type), X.ORDER_ERROR)
-        self.assertEqual(int(reply.get(D.ERROR_CODE)), rules.SPREAD_NOT_ALLOWED)
-
-    def test_two_leg_orders_are_refused(self):
-        self.client.clear()
-        self.client.raw(2102, user_id=USER_ONE)          # TWOL_BOARD_LOT_IN
-        reply = self.client.last()
-        self.assertEqual(int(reply.msg_type), X.ORDER_ERROR)
-        self.assertEqual(int(reply.get(D.ERROR_CODE)),
-                         rules.BAD_TRANSACTION_CODE)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 UNKNOWN_USER = 59999
@@ -895,13 +888,6 @@ class TrimmedOrderFlowTest(unittest.TestCase):
             codes.append(layouts.transaction_code(payload))
         self.assertEqual([X.ORDER_ERROR], codes)
 
-    def test_the_spread_family_is_still_refused(self):
-        # Not trimmed, and not supported: the two facts are independent, and
-        # serving the trimmed flow must not have quietly opened this one.
-        self.client.raw(2100, user_id=USER_ONE)
-        self.assertEqual(rules.SPREAD_NOT_ALLOWED,
-                         int(self.client.last().get(D.ERROR_CODE)))
-
     def test_the_immediate_ack_family_is_refused_by_code(self):
         # Chapter 15's opt-in, which lives on its own Gateway Router port.
         # It shares MS_OE_REQUEST_TR's structure, so it would decode -- and
@@ -909,3 +895,178 @@ class TrimmedOrderFlowTest(unittest.TestCase):
         self.client.raw(X.TRIMMED_BOARD_LOT_ACK_IN, user_id=USER_ONE)
         self.assertIsNone(
             self.harness.venue.layouts.layout(X.TRIMMED_BOARD_LOT_ACK_IN))
+
+
+class SpreadOrderTest(unittest.TestCase):
+    """A calendar spread: one order on two futures, priced at their gap.
+
+    "Spread order is a combination of two normal orders on two contracts with
+    same symbol and different expiry dates" (Chapter 5). The combination is an
+    instrument here, with a book of its own quoted at ``PriceDiff`` -- which
+    is what lets the ordinary engine match it, since price-time priority on a
+    difference is still price-time priority. What a spread adds is at the
+    edges: which pairs are valid, and that one match becomes two leg trades.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness()
+        self.addCleanup(self.harness.close)
+        self.client = self.harness.client()
+
+    def refused(self, **kwargs):
+        self.client.clear()
+        self.client.spread_order(USER_ONE, **kwargs)
+        reply = self.client.last()
+        self.assertIsNotNone(reply, "nothing was answered")
+        return int(reply.msg_type), int(reply.get(D.ERROR_CODE))
+
+    def test_a_combination_is_an_instrument_of_its_own(self):
+        self.assertEqual(5, len(self.harness.venue.spreads))
+        self.assertIn(SPREAD_CANONICAL, self.harness.venue.instruments)
+        combination = self.harness.venue.spread_for(SPREAD_CANONICAL)
+        self.assertIsNotNone(combination)
+        self.assertEqual(NEAR_CANONICAL, combination.near.canonical)
+        self.assertEqual(FAR_CANONICAL, combination.far.canonical)
+
+    def test_its_price_is_a_difference_and_may_be_negative(self):
+        # The one core capability a spread needed: a price that is a gap
+        # rather than a level, so the "a price must be positive" rule does
+        # not apply to it. A calendar spread routinely trades through zero.
+        instrument = self.harness.venue.instruments[SPREAD_CANONICAL]
+        self.assertTrue(instrument.signed_price)
+        self.client.spread_order(USER_ONE, difference="-100.00")
+        confirmation = self.client.last()
+        self.assertEqual(X.SP_ORDER_CONFIRMATION, int(confirmation.msg_type))
+        self.assertEqual("0", confirmation.get(D.ERROR_CODE))
+        self.assertEqual("-100.00", confirmation.get(D.PRICE_DIFF))
+
+    def test_a_spread_order_is_confirmed_with_both_its_legs(self):
+        self.client.spread_order(USER_ONE, quantity=25, difference="50.00")
+        confirmation = self.client.last()
+        self.assertEqual(X.SP_ORDER_CONFIRMATION, int(confirmation.msg_type))
+        self.assertEqual("1", confirmation.get(D.ORDER_NUMBER))
+        self.assertEqual("50.00", confirmation.get(D.PRICE_DIFF))
+        self.assertEqual("NIFTY", confirmation.get(D.SYMBOL))
+        self.assertEqual("NIFTY", confirmation.get(D.LEG2_SYMBOL))
+        self.assertNotEqual(confirmation.get(D.EXPIRY_DATE),
+                            confirmation.get(D.LEG2_EXPIRY_DATE))
+        # The second leg is always the opposite side of the first.
+        self.assertEqual(D.BuySell.BUY, confirmation.get(D.BUY_SELL))
+        self.assertEqual(D.BuySell.SELL, confirmation.get(D.LEG2_BUY_SELL))
+
+    def test_the_wire_frame_is_the_published_size(self):
+        message = self.client.spread_order(USER_ONE)
+        raw = self.harness.venue.layouts.layout(X.SP_BOARD_LOT_IN).encode(
+            message)
+        self.assertEqual(480, len(raw))
+
+    def test_modify_and_cancel_answer_in_the_spread_codes(self):
+        self.client.spread_order(USER_ONE, quantity=25, difference="50.00")
+        self.client.clear()
+
+        self.client.spread_modify(USER_ONE, "1", quantity=50,
+                                  difference="60.00")
+        modified = self.client.last()
+        self.assertEqual(X.SP_ORDER_MOD_CON_OUT, int(modified.msg_type))
+        self.assertEqual("60.00", modified.get(D.PRICE_DIFF))
+        self.assertEqual("50", modified.get(D.VOLUME))
+
+        self.client.spread_cancel(USER_ONE, "1")
+        self.assertEqual(X.SP_ORDER_CXL_CONFIRMATION,
+                         int(self.client.last().msg_type))
+
+    def test_a_match_is_reported_as_a_trade_in_each_leg(self):
+        # The whole point of a spread. Only the *difference* was agreed, so
+        # the levels are the exchange's to pick -- but the gap between the
+        # two prices a member is told is exactly what they traded at.
+        buyer = self.harness.client(box_id=BOX_ONE, users=(USER_ONE,))
+        seller = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+        buyer.spread_order(USER_ONE, side=D.BuySell.BUY, quantity=25,
+                           difference="50.00")
+        buyer.clear()
+        seller.spread_order(USER_THREE, side=D.BuySell.SELL, quantity=25,
+                            difference="50.00")
+
+        fills = [m for m in seller.received()
+                 if int(m.msg_type) == X.TRADE_CONFIRMATION]
+        self.assertEqual(2, len(fills))
+        near, far = fills
+        self.assertEqual(NEAR_CANONICAL.split("-")[0], near.get(D.SYMBOL))
+        self.assertEqual(near.get(D.SYMBOL), far.get(D.SYMBOL))
+        self.assertNotEqual(near.get(D.EXPIRY_DATE), far.get(D.EXPIRY_DATE))
+        self.assertEqual(D.BuySell.SELL, near.get(D.BUY_SELL))
+        self.assertEqual(D.BuySell.BUY, far.get(D.BUY_SELL))
+        difference = (self.harness.venue.codec.parse(far.get(D.FILL_PRICE))
+                      - self.harness.venue.codec.parse(near.get(D.FILL_PRICE)))
+        self.assertEqual("50.00", self.harness.venue.codec.format(difference))
+
+        # And the other side is told the same trade from its own point of view.
+        counterparty = [m for m in buyer.received()
+                        if int(m.msg_type) == X.TRADE_CONFIRMATION]
+        self.assertEqual(2, len(counterparty))
+        self.assertEqual(D.BuySell.BUY, counterparty[0].get(D.BUY_SELL))
+
+    def test_two_spreads_that_do_not_cross_both_rest(self):
+        self.client.spread_order(USER_ONE, side=D.BuySell.BUY, quantity=25,
+                                 difference="40.00")
+        self.client.spread_order(USER_ONE, side=D.BuySell.SELL, quantity=25,
+                                 difference="60.00")
+        self.assertEqual(2, len(self.harness.venue.markets["NORMAL"]
+                                .book(SPREAD_CANONICAL).orders()))
+
+    def test_legs_in_the_wrong_expiry_order_are_refused(self):
+        # PriceDiff is "the difference between the prices at which leg2 and
+        # leg1 should trade", so the leg order fixes the sign of the whole
+        # market. The document has a code for exactly this, which is what
+        # says the ordering is its rule rather than this simulator's.
+        code, error = self.refused(near=FAR_FUTURE, far=NEAR_FUTURE)
+        self.assertEqual(X.SP_ORDER_ERROR, code)
+        self.assertEqual(rules.EXPIRY_NOT_ASCENDING, error)
+
+    def test_both_legs_on_one_expiry_are_refused(self):
+        code, error = self.refused(near=NEAR_FUTURE, far=NEAR_FUTURE)
+        self.assertEqual(X.SP_ORDER_ERROR, code)
+        self.assertEqual(rules.EXPIRY_NOT_ASCENDING, error)
+
+    def test_legs_on_different_underlyings_are_refused(self):
+        code, error = self.refused(far=OTHER_SYMBOL_FUTURE)
+        self.assertEqual(rules.SPREAD_DIFFERENT_UNDERLYING, error)
+
+    def test_a_pair_that_is_not_a_listed_combination_is_refused(self):
+        # "Valid spread combinations will be pre-defined in the Spread
+        # Combination Contract file" -- a pair of listed futures is not
+        # automatically a spread.
+        code, error = self.refused(near=NEAR_FUTURE, far=UNCOMBINED_FUTURE)
+        self.assertEqual(rules.INVALID_CONTRACT_COMBINATION, error)
+
+    def test_an_option_leg_is_refused(self):
+        # "Spread day orders will be allowed only on future contracts."
+        code, error = self.refused(near=OPTION, far=FAR_FUTURE)
+        self.assertIn(error, (rules.SPREAD_NOT_ALLOWED_HERE,
+                              rules.SPREAD_DIFFERENT_UNDERLYING))
+
+    def test_legs_of_different_quantities_are_refused(self):
+        code, error = self.refused(quantity=25,
+                                   extra={D.LEG2_VOLUME: 50})
+        self.assertEqual(rules.QTY_SHOULD_BE_SAME, error)
+
+    def test_an_ioc_spread_is_refused(self):
+        # "Currently Spread IOC orders are not allowed."
+        code, error = self.refused(extra={D.FLAG_IOC: "Y", D.FLAG_DAY: "N"})
+        self.assertEqual(rules.SPREAD_IOC_NOT_ALLOWED, error)
+
+    def test_a_difference_outside_the_operating_range_is_refused(self):
+        # "Spread day orders on eligible spread combinations with price
+        # difference within the operating range, will be allowed."
+        code, error = self.refused(difference="900.00")
+        self.assertEqual(X.SP_ORDER_ERROR, code)
+        self.assertEqual(16284, error)          # the band refusal
+
+    def test_two_leg_and_three_leg_orders_are_still_refused(self):
+        # They share MS_SPD_OE_REQUEST and nothing else: PriceDiff "is not
+        # used for 2L/3L", so the one field that gives a spread its price
+        # means nothing to them.
+        for code in (X.TWOL_BOARD_LOT_IN, X.THRL_BOARD_LOT_IN):
+            answered, error = self.refused(code=code)
+            self.assertEqual(X.SP_ORDER_ERROR, answered)
+            self.assertEqual(rules.BAD_TRANSACTION_CODE, error)

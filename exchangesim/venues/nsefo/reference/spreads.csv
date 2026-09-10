@@ -1,0 +1,38 @@
+# NSE Futures & Options spread combinations.
+#
+# UNVERIFIED sample data, in the same spirit as contracts.csv beside it. The
+# combinations are real in shape -- consecutive expiries of a listed futures
+# contract -- but the operating ranges are plausible rather than quoted.
+#
+# "Spread order is a combination of two normal orders on two contracts with
+# same symbol and different expiry dates" (Chapter 5), and "spread day orders
+# will be allowed only on future contracts. Valid spread combinations will be
+# pre-defined in the Spread Combination Contract file" -- this is that file.
+#
+# A combination is quoted at the *difference* between its two legs, PriceDiff,
+# defined by the document as "the difference between the prices at which leg2
+# and leg1 should trade": far leg minus near leg. That is why the range
+# columns are absolute rather than a percentage of a base price the way
+# contracts.csv's band_pct is -- a percentage of a difference that is near
+# zero is meaningless, and "the operating range" is what the document calls it.
+#
+# columns
+#   instrument_name  FUTIDX or FUTSTK; only futures may be spread
+#   symbol           the underlying, shared by both legs
+#   near_expiry      ISO date of leg 1, the nearer expiry
+#   far_expiry       ISO date of leg 2, the further one
+#   base_diff        the reference difference, and the price at which a leg
+#                    that has never traded is deemed to trade
+#   range_low        lowest permitted PriceDiff
+#   range_high       highest permitted PriceDiff
+#
+# Lot size and tick size are NOT columns: a combination trades in whole
+# multiples of its legs' own lot, and its difference moves in its legs' own
+# tick, so both are taken from the legs and a mismatch between them is a
+# configuration error the venue refuses at start-up.
+instrument_name,symbol,near_expiry,far_expiry,base_diff,range_low,range_high
+FUTIDX,NIFTY,2026-09-24,2026-10-29,50.00,-200.00,300.00
+FUTIDX,NIFTY,2026-10-29,2026-11-26,50.00,-200.00,300.00
+FUTIDX,NIFTY,2026-09-24,2026-11-26,100.00,-250.00,450.00
+FUTIDX,BANKNIFTY,2026-09-24,2026-10-29,120.00,-400.00,650.00
+FUTSTK,RELIANCE,2026-09-24,2026-10-29,12.00,-40.00,65.00
