@@ -26,7 +26,9 @@
     {"send": "dealer", "fields": {"35": "2300", "9004": "0", "9003": "40521", "9140": "40521", "9141": "Nse@2026", "9120": "10123"}},
     {"expect": "dealer", "fields": {"35": "2301", "9004": "0", "9140": "40521", "9120": "10123"}},
 
-    {"comment": "Sign-on is answered with the market's state, so a client never has to guess whether the venue is open."},
+    {"comment": "The market's state is asked for, never volunteered: SYSTEM_INFORMATION_IN once signed on. A real client sets its streams up from the answer and asserts on a second one, so sign-on itself sends nothing more."},
+    {"expect_none": "dealer", "fields": {"35": "1601"}},
+    {"send": "dealer", "fields": {"35": "1600", "9004": "0", "9003": "40521"}},
     {"expect": "dealer", "fields": {"35": "1601", "9160": "1"}},
 
     {"comment": "A fresh Regular Lot buy. NSE has no ClOrdID: the confirmation is where the client learns the OrderNumber, and it is the only handle it gets."},

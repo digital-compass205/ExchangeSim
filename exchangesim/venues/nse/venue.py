@@ -389,8 +389,9 @@ class NseVenue(Venue):
         changed = target.set_state(state, symbol=symbol)
         if state == TradingState.PRE_OPEN and symbol is None:
             self.preopen.open()
-        if self.application is not None:
-            self.application.broadcast_state(state)
+        # No SYSTEM_INFORMATION_OUT to the signed-on users: it answers a
+        # request, and a client asserts on one it did not ask for. The
+        # published market-status broadcasts are unbuilt (see ASSUMPTIONS).
         return changed
 
     def _leaving_preopen(self, market, state, symbol):

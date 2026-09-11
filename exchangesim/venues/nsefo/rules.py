@@ -581,6 +581,14 @@ ASSUMPTIONS = [
     "download data, and a recovered message is always the non-trimmed "
     "form.",
 
+    "SYSTEM_INFORMATION_OUT (1601) is sent only in answer to "
+    "SYSTEM_INFORMATION_IN -- never on sign-on and never when the market "
+    "changes state. A real client sets its streams up from it once and "
+    "asserts on a second. The market-status broadcasts the document "
+    "publishes for a state change -- BC_OPEN_MSG (6511), BC_CLOSE_MSG "
+    "(6521), BC_PRE_OR_POST_DAY_MSG (6531), BC_PRE_OPEN_ENDED (6571) -- are "
+    "unbuilt, so a client learns of a state change only by asking.",
+
     "The dynamic half of the cryptographic IV is laid out little-endian. It "
     "is the one value in this protocol that does not follow the wire's "
     "big-endian convention, because it never reaches the wire: the "

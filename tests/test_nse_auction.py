@@ -259,12 +259,15 @@ class PreOpenTest(unittest.TestCase):
             self.harness.command("orders", market="NORMAL")["orders"], [])
 
     def test_the_market_status_a_client_sees_follows_the_phase(self):
-        self.client.clear()
+        # Asked for, not volunteered: a client asserts on a 1601 it did not
+        # request, so locking the book tells it nothing until it asks.
         self.harness.command("preopen.lock")
+        self.client.clear()
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
         status = [m for m in self.client.received()
                   if int(m.msg_type) == X.SYSTEM_INFORMATION_OUT]
-        self.assertTrue(status)
-        self.assertEqual(status[-1].get(D.NORMAL_STATUS),
+        self.assertEqual(1, len(status))
+        self.assertEqual(status[0].get(D.NORMAL_STATUS),
                          D.MarketStatus.PRE_OPEN_ENDED)
 
 

@@ -227,11 +227,14 @@ Six things here are load-bearing.
   the two differ only in their first twelve bytes, so the wrong one parses
   half a user id as a transaction code. A recovered message is always the
   non-trimmed form, which is why the store keeps the `Message` rather than
-  the bytes that went out. And **`SYSTEM_INFORMATION_OUT` is never
-  stored**: a client sets its streams up from it once, and a second one
-  replayed by a download from zero crashed a real F&O client on an
-  assertion. `rules.NOT_RECOVERABLE` is the list; a new unsolicited
-  message type belongs on it unless Chapter 5 says a download returns it.
+  the bytes that went out.
+- **`SYSTEM_INFORMATION_OUT` answers `SYSTEM_INFORMATION_IN` and nothing
+  else.** A real F&O client sets its streams up from it once and asserts on
+  a second, so it is not sent on sign-on, not sent on a state change, and
+  not stored for a download (`rules.NOT_RECOVERABLE`) -- all three did, and
+  the replayed one crashed that client. The market-status broadcasts
+  (`BC_OPEN_MSG` and kin) are unbuilt, so a client learns of a state change
+  only by asking; do not "fix" that by volunteering a 1601.
 - **The audit records the plaintext packet, not the ciphertext.** Under the
   existing encryption methodology the keystream runs continuously across the
   whole connection, so a packet cannot be decrypted out of order — and

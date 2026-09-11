@@ -32,7 +32,8 @@
     {"send": "two", "fields": {"35": "2300", "9004": "0", "9003": "40777", "9140": "40777", "9141": "Nse@2026", "9120": "10456"}},
     {"expect": "two", "fields": {"35": "2301", "9004": "0"}},
 
-    {"comment": "A client signing on in the pre-open is told so: SYSTEM_INFORMATION_OUT with the Normal market at status 0, PreOpen."},
+    {"comment": "A client signing on in the pre-open learns so by asking: SYSTEM_INFORMATION_OUT with the Normal market at status 0, PreOpen."},
+    {"send": "two", "fields": {"35": "1600", "9004": "0", "9003": "40777"}},
     {"expect": "two", "fields": {"35": "1601", "9160": "0"}},
 
     {"clear": "one"},
@@ -59,6 +60,8 @@
     {"comment": "Lock the book. NSE calls this 'Preopen ended' and reports it as market status 3; nothing executes yet."},
     {"control": "preopen.lock", "args": {},
      "expect_result": {"locked": true, "state": "OPENING_AUCTION"}},
+    {"expect_none": "one", "fields": {"35": "1601"}},
+    {"send": "one", "fields": {"35": "1600", "9004": "0", "9003": "40521"}},
     {"expect": "one", "fields": {"35": "1601", "9160": "3"}},
     {"control": "trades", "args": {"market": "NORMAL", "symbol": "ITC-EQ"},
      "expect_result": {"trades": []}},

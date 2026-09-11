@@ -518,16 +518,44 @@ class HeaderUserIdTest(unittest.TestCase):
         self.assertEqual("16042", refusal.get(D.ERROR_CODE))
         self.assertEqual(str(UNKNOWN_USER), refusal.get(D.USER_ID))
 
-    def test_a_market_state_broadcast_names_each_user_it_reaches(self):
-        # Sending fills the header's user id only where it is still empty, so
-        # one message shared across every session named the first user signed
-        # on to every user after it.
-        one = self.harness.client(box_id=BOX_ONE, users=(USER_ONE,))
-        other = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+
+class SystemInformationTest(unittest.TestCase):
+    """SYSTEM_INFORMATION_OUT answers a request, and nothing else.
+
+    A real client sets its streams up from it once and asserts on a second,
+    so every 1601 it did not ask for is a crash. There were three: one on
+    sign-on, one on every market state change, and the download replaying
+    both.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness()
+        self.addCleanup(self.harness.close)
+        self.client = self.harness.client(users=())
+
+    def test_sign_on_is_answered_with_the_sign_on_response_alone(self):
+        self.client.sign_on(USER_ONE)
+        self.assertEqual([X.SIGN_ON_REQUEST_OUT],
+                         codes(self.client.reports()))
+
+    def test_a_market_state_change_sends_nothing_unasked(self):
+        self.client.sign_on(USER_ONE)
+        self.client.clear()
         self.harness.set_state(TradingState.HALTED)
-        self.assertEqual({X.SYSTEM_INFORMATION_OUT}, self.names(one, USER_ONE))
-        self.assertEqual({X.SYSTEM_INFORMATION_OUT},
-                         self.names(other, USER_THREE))
+        self.harness.set_state(TradingState.OPEN)
+        self.assertEqual([], self.client.received())
+
+    def test_the_state_a_client_asks_for_follows_the_market(self):
+        self.client.sign_on(USER_ONE)
+        self.harness.set_state(TradingState.HALTED)
+        self.client.clear()
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        answers = self.client.received()
+        self.assertEqual([X.SYSTEM_INFORMATION_OUT],
+                         [int(message.msg_type) for message in answers])
+        self.assertEqual(
+            rules.STATE_TO_MARKET_STATUS[TradingState.HALTED],
+            answers[0].get(D.NORMAL_STATUS))
 
 
 class MessageDownloadTest(unittest.TestCase):
@@ -749,15 +777,6 @@ class MessageDownloadTest(unittest.TestCase):
         codes = self.codes_of(self.recovered())
         self.assertNotIn(X.SYSTEM_INFORMATION_OUT, codes)
         self.assertEqual([X.SIGN_ON_REQUEST_OUT, X.ORDER_CONFIRMATION], codes)
-
-    def test_a_market_state_broadcast_is_not_replayed_either(self):
-        # The same structure goes out unsolicited when the market moves, and
-        # a download after it must not hand the client a second copy.
-        since = self.cursor()
-        self.harness.set_state(TradingState.HALTED)
-        self.assertEqual(X.SYSTEM_INFORMATION_OUT,
-                         int(self.client.last().msg_type))
-        self.assertEqual([], self.recovered(since=since))
 
 
 class TrimmedOrderFlowTest(unittest.TestCase):

@@ -402,6 +402,15 @@ ASSUMPTIONS = [
     "download data, and a recovered message is always the non-trimmed "
     "form.",
 
+    "SYSTEM_INFORMATION_OUT (1601) is sent only in answer to "
+    "SYSTEM_INFORMATION_IN -- never on sign-on and never when the market "
+    "changes state. A real Futures & Options client sets its streams up "
+    "from it once and asserts on a second. The market-status broadcasts the "
+    "document publishes for a state change -- BC_OPEN_MESSAGE (6511), "
+    "BC_CLOSE_MESSAGE (6521), BC_PREOPEN_SHUTDOWN_MSG (6531), "
+    "BC_NORMAL_MKT_PREOPEN_ENDED (6571) -- are unbuilt, so a client learns "
+    "of a state change, the pre-open's lock included, only by asking.",
+
     "The Gateway Router's TLS version is configurable, and defaults to '1.3', "
     "which the specification requires and which the RHEL 8 target's Python "
     "supports. An interpreter linked against OpenSSL 1.0.2, such as this "

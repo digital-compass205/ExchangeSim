@@ -730,10 +730,10 @@ class NsefoVenue(Venue):
         target = self.markets.get(market or self.market_name)
         if target is None:
             raise KeyError(market)
-        changed = target.set_state(state, symbol=symbol)
-        if self.application is not None:
-            self.application.broadcast_state(state)
-        return changed
+        # No SYSTEM_INFORMATION_OUT to the signed-on users: it answers a
+        # request, and a client asserts on one it did not ask for. The
+        # published market-status broadcasts are unbuilt (see ASSUMPTIONS).
+        return target.set_state(state, symbol=symbol)
 
     # -- engine ----------------------------------------------------------
 

@@ -187,10 +187,12 @@ class NseApplication(Application):
     # -- user session callbacks --------------------------------------------
 
     def on_logon(self, session):
+        # Nothing is sent unasked. The client learns the market's state by
+        # sending SYSTEM_INFORMATION_IN, which "can be sent only if the trader
+        # has logged on successfully" -- and a real client sets its streams up
+        # from the answer once and asserts on a second, so volunteering one
+        # here would be a duplicate the moment it asked.
         self._sessions[session.key] = session
-        # A newly signed-on user is told the state of the market, so it never
-        # has to guess whether the venue is open.
-        session.send(self.system_information())
 
     def on_logout(self, session, reason):
         """Cancel on disconnect, where the user is configured for it.
@@ -808,16 +810,6 @@ class NseApplication(Application):
         which is what a client that has gone away would get anyway.
         """
         self._emit(None, events)
-
-    def broadcast_state(self, state):
-        """Tell every signed-on user that the market moved.
-
-        One message per user, not one shared: sending stamps the header's
-        user id and TimeStamp1 only where they are still empty, so a shared
-        message would name the first user to every user after it.
-        """
-        for session in list(self._sessions.values()):
-            session.send(self.system_information())
 
     # -- time --------------------------------------------------------------
 

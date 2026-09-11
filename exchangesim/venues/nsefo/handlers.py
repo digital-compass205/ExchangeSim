@@ -169,8 +169,12 @@ class NsefoApplication(Application):
     # -- user session callbacks --------------------------------------------
 
     def on_logon(self, session):
+        # Nothing is sent unasked. The client learns the market's state by
+        # sending SYSTEM_INFORMATION_IN, which "can be sent only if the trader
+        # has logged on successfully" -- and a real client sets its streams up
+        # from the answer once and asserts on a second, so volunteering one
+        # here would be a duplicate the moment it asked.
         self._sessions[session.key] = session
-        session.send(self.system_information())
 
     def on_logout(self, session, reason):
         """Cancel on disconnect, where the user is configured for it."""
@@ -1013,13 +1017,6 @@ class NsefoApplication(Application):
                     D.SECURITY_BOOKS_MERGED):
             message.set(tag, "N")
         return message
-
-    def broadcast_state(self, state):
-        # One message per user, not one shared: sending stamps the header's
-        # user id and TimeStamp1 only where they are still empty, so a shared
-        # message would name the first user to every user after it.
-        for session in list(self._sessions.values()):
-            session.send(self.system_information())
 
     # -- time --------------------------------------------------------------
 
