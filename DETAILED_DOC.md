@@ -945,32 +945,54 @@ built, and refused with a published error code rather than faked:
 - **trade modification and cancellation**, the freeze and approval flow, and
   market-wide index circuit breakers.
 
-**Spread orders trade on a book of their own.** F&O's spread is a calendar
-spread — "a combination of two normal orders on two contracts with same
-symbol and different expiry dates" — and it is quoted at `PriceDiff`, the gap
-between the legs. Modelled as an instrument, it needs no matching of its own:
-price-time priority on a difference is still price-time priority. The core
-gained exactly one thing for it, `Instrument.signed_price`, because a spread's
-price may be zero or negative and "a price must be positive" is a rule about
-levels. Valid pairs are read from `reference/spreads.csv`, the Spread
-Combination file; two listed futures are not automatically a spread. One match
-is reported as **two** `TRADE_CONFIRMATION`s, one per leg, and only the
-difference between their prices is exact — the levels are an ASSUMPTION the
-document leaves to trading rules. Two-leg and three-leg orders share the
-480-byte structure and nothing else, and are refused by transaction code.
+**Order entry is served in both published encodings, at both NSE venues.**
+Each publishes its own compact `_TR` family alongside its plain structure —
+Capital Market's Chapter 10 appendix requires it outright: "the Request
+messages in transaction codes [`BOARD_LOT_IN`, `ORDER_MOD_IN`,
+`ORDER_CANCEL_IN`] must have BookType 1 or 11 or 12" and the plain structure
+"is not allowed" with those book types at all, and BookType 1 (Regular Lot)
+is the only book Capital Market trades — so this is what a real Direct
+Interface gateway sends for every order it accepts there, exactly as
+Futures & Options' Chapter 11 says of its own ("Only Trim-NNF protocol is
+supported by Direct Interface"). A client is answered in whichever encoding
+it asked in, and an unsolicited report follows the encoding its *order*
+arrived in.
 
-**Order entry is served in both published encodings.** The plain 316-byte
-`MS_OE_REQUEST` and the compact 158-byte `MS_OE_REQUEST_TR`, which carries no
-forty-byte header at all — and which is what a real gateway sends, Chapter 11
-saying "Only Trim-NNF protocol is supported by Direct Interface". A client is
-answered in whichever it asked in, and an unsolicited report follows the
-encoding its *order* arrived in. The one gap the appendix leaves is a trimmed
-`ORDER_ERROR`: there is none, so a refusal is the confirmation code carrying a
-non-zero `ErrorCode` — an ASSUMPTION, in `rules.TRIMMED_RESPONSES`. Chapter 15's
-immediate-acknowledgement codes share these structures but live on a separate
-Gateway Router port, and are unbuilt.
+The two families are transcribed separately and are not the same shape.
+**Capital Market's own appendix publishes a trimmed `ORDER_ERROR_TR`
+(20231), `ORDER_MOD_REJECT_TR` (20042) and `ORDER_CANCEL_REJECT_TR`
+(20072)**, so a refusal there answers in its own trimmed code — no ErrorCode
+branching needed, unlike Futures & Options, whose appendix leaves a gap: it
+publishes no trimmed `ORDER_ERROR` at all, so a refusal is the confirmation
+code carrying a non-zero `ErrorCode` instead — an ASSUMPTION, in
+`nsefo/rules.py:TRIMMED_RESPONSES`. Neither venue builds its
+immediate-acknowledgement family: Futures & Options' Chapter 15
+(`TRIMMED_*_ACK_IN` on a separate Gateway Router port, with its own
+`MS_ACK_RESPONSE`) and the alternate `TRIMMED_*_ACK_IN` codes Capital
+Market's own tables list beside its ordinary trimmed ones, for which that
+document gives nothing beyond the alternate number.
 
-And three things that are built but not to the letter:
+**Spread orders trade on a book of their own, and are Futures & Options
+only.** F&O's spread is a calendar spread — "a combination of two normal
+orders on two contracts with same symbol and different expiry dates" — and
+it is quoted at `PriceDiff`, the gap between the legs. Modelled as an
+instrument, it needs no matching of its own: price-time priority on a
+difference is still price-time priority. The core gained exactly one thing
+for it, `Instrument.signed_price`, because a spread's price may be zero or
+negative and "a price must be positive" is a rule about levels. Valid pairs
+are read from `reference/spreads.csv`, the Spread Combination file; two
+listed futures are not automatically a spread. One match is reported as
+**two** `TRADE_CONFIRMATION`s, one per leg, and only the difference between
+their prices is exact — the levels are an ASSUMPTION the document leaves to
+trading rules. Two-leg and three-leg orders share the 480-byte structure and
+nothing else, and are refused by transaction code.
+
+Each venue's own remaining assumptions are in `venues/nse/rules.py:ASSUMPTIONS`
+and `venues/nsefo/rules.py:ASSUMPTIONS`, reported by
+`exsim --port 9103 call venue.assumptions` (Cash) and `--port 9104` (F&O).
+
+**Both NSE venues** share the connection, session and download machinery
+above, and the following three things that are built but not to the letter:
 
 - **the Gateway Router's certificate is the simulator's own.** The leg *is* TLS
   now, defaulting to 1.3 as the specification requires, and the published

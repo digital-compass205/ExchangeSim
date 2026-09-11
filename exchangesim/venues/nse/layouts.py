@@ -251,6 +251,192 @@ def _system_information_fields():
     )
 
 
+# -- the "trimmed" order flow -------------------------------------------------
+#
+# Chapter 10 appendix, Tables 57-60, and the shape a real Direct Interface
+# gateway actually sends: "the Request messages in transaction codes
+# [BOARD_LOT_IN, ORDER_MOD_IN, ORDER_CANCEL_IN] must have BookType 1 or 11 or
+# 12", and MS_OE_REQUEST "is not allowed" with those book types at all.
+# Regular Lot is BookType 1, the only book this venue trades, so this family
+# is not an optional extra -- it is what a member actually sends for every
+# order this venue accepts.
+#
+# None of these carry the forty-byte MESSAGE_HEADER: each opens with a
+# compact prefix of its own, so each gets its own `L.HeaderLayout`. The order
+# entry request and the modify/cancel pair do not even share a prefix with
+# each other -- see the two headers below -- which is the clearest sign that
+# "trimmed" describes an outcome, not one shared structure.
+
+
+def _oe_request_tr_fields():
+    """``ORDER_ENTRY_REQUEST_TR``, Table 57 -- 136 bytes."""
+    return _sec_info(6) + (
+        L.Field(D.ACCOUNT_NUMBER, "AccountNumber", T.Char(10), 18),
+        L.Field(D.BOOK_TYPE, "BookType", T.SHORT, 28),
+        L.Field(D.BUY_SELL, "BuySell", T.SHORT, 30),
+        L.Field(D.DISCLOSED_VOL, "DisclosedVol", T.LONG, 32),
+        L.Field(D.VOLUME, "Volume", T.LONG, 36),
+        L.Field(D.PRICE, "Price", T.LONG, 40, L.PAISE),
+        L.Field(D.GOOD_TILL_DATE, "GoodTillDate", T.LONG, 44),
+        _order_flags(48),
+        L.Field(D.BRANCH_ID, "BranchId", T.SHORT, 50),
+        L.Field(D.TRADER_ID, "TraderId", T.LONG, 52),
+        L.Field(D.BROKER_ID, "BrokerId", T.Char(5), 56),
+        L.Field(D.SUSPENDED, "Suspended", T.Char(1), 61),
+        L.Field(D.SETTLOR, "Settlor", T.Char(12), 62),
+        L.Field(D.PRO_CLIENT, "ProClient", T.SHORT, 74),
+        L.Field(D.NNF_FIELD, "NNFField", T.DOUBLE, 76),
+        L.Field(D.TRANSACTION_ID, "TransactionId", T.LONG, 84),
+        L.Field(D.PAN, "PAN", T.Char(10), 88),
+        L.Field(D.ALGO_ID, "AlgoID", T.LONG, 98),
+        L.Reserved(102, 2, "ReservedFiller"),
+        L.Reserved(104, 32),
+    )
+
+
+#: ORDER_ENTRY_REQUEST_TR's prefix: six bytes where the plain header keeps
+#: forty.
+#: The document calls this field "TraderId", but it plays exactly the role
+#: the plain header's "UserId" does -- the one field ``NnfSessionManager``
+#: stamps and a box routes an inbound message by -- so it keeps that tag.
+HEADER_OE_TR = L.HeaderLayout(6, (
+    L.Field(L.TRANSACTION_CODE, "TransactionCode", T.SHORT, 0),
+    L.Field(D.USER_ID, "UserId", T.LONG, 2),
+))
+
+
+def _om_body_fields(response):
+    """The body ``ORDER_OM_REQUEST_TR`` (Table 58) and ``_RESPONSE_TR``
+    (Table 59) share from offset 24 on -- identical but for a nanosecond
+    ``Timestamp`` the response carries at 132 and the request does not, and
+    the trailing reserved run: 24 bytes in the request, 52 in the response.
+    Together those are the 36 bytes between 180 and 216.
+    """
+    fields = _sec_info(24) + (
+        L.Field(D.ORDER_NUMBER, "OrderNumber", T.DOUBLE, 36),
+        L.Field(D.ACCOUNT_NUMBER, "AccountNumber", T.Char(10), 44),
+        L.Field(D.BOOK_TYPE, "BookType", T.SHORT, 54),
+        L.Field(D.BUY_SELL, "BuySell", T.SHORT, 56),
+        L.Field(D.DISCLOSED_VOL, "DisclosedVol", T.LONG, 58),
+        L.Field(D.DISCLOSED_VOL_REMAINING, "DisclosedVolRemaining",
+                T.LONG, 62),
+        L.Field(D.TOTAL_VOL_REMAINING, "TotalVolRemaining", T.LONG, 66),
+        L.Field(D.VOLUME, "Volume", T.LONG, 70),
+        L.Field(D.VOLUME_FILLED_TODAY, "VolumeFilledToday", T.LONG, 74),
+        L.Field(D.PRICE, "Price", T.LONG, 78, L.PAISE),
+        L.Field(D.ENTRY_DATE_TIME, "EntryDateTime", T.LONG, 82),
+        L.Field(D.LAST_MODIFIED, "LastModified", T.LONG, 86),
+        _order_flags(90),
+        L.Field(D.BRANCH_ID, "BranchId", T.SHORT, 92),
+        L.Field(D.TRADER_ID, "TraderId", T.LONG, 94),
+        L.Field(D.BROKER_ID, "BrokerId", T.Char(5), 98),
+        L.Field(D.SUSPENDED, "Suspended", T.Char(1), 103),
+        L.Field(D.SETTLOR, "Settlor", T.Char(12), 104),
+        L.Field(D.PRO_CLIENT, "ProClient", T.SHORT, 116),
+        L.Field(D.SETTLEMENT_TYPE, "SettlementType", T.SHORT, 118),
+        L.Field(D.NNF_FIELD, "NNFField", T.DOUBLE, 120),
+        L.Field(D.TRANSACTION_ID, "TransactionId", T.LONG, 128),
+    )
+    tail = 132
+    if response:
+        fields += (L.Field(D.TIMESTAMP, "Timestamp", T.LONG_LONG, 132),)
+        tail = 140
+    fields += (
+        L.Field(D.PAN, "PAN", T.Char(10), tail),
+        L.Field(D.ALGO_ID, "AlgoID", T.LONG, tail + 10),
+        L.Reserved(tail + 14, 2, "ReservedFiller"),
+        L.Field(D.LAST_ACTIVITY_REFERENCE, "LastActivityReference",
+                T.LONG_LONG, tail + 16),
+        L.Reserved(tail + 24, 52 if response else 24),
+    )
+    return fields
+
+
+#: ORDER_OM_REQUEST_TR's and ORDER_OM_RESPONSE_TR's shared twenty-four byte
+#: prefix -- Tables 58 and 59 open with the identical eight fields, unlike
+#: the order entry request above, which shares a header with nothing.
+HEADER_OM_TR = L.HeaderLayout(24, (
+    L.Field(L.TRANSACTION_CODE, "TransactionCode", T.SHORT, 0),
+    L.Field(D.LOG_TIME, "LogTime", T.LONG, 2),
+    L.Field(D.USER_ID, "UserId", T.LONG, 6),
+    L.Field(D.ERROR_CODE, "ErrorCode", T.SHORT, 10),
+    L.Field(D.TIMESTAMP1, "TimeStamp1", T.LONG_LONG, 12),
+    L.Field(D.TIMESTAMP2, "TimeStamp2", T.CHAR, 20),
+    L.Field(D.MOD_CXL_BY, "ModCxlBy", T.Char(1), 21),
+    L.Field(D.REASON_CODE, "ReasonCode", T.SHORT, 22),
+))
+
+
+def _trade_confirm_tr_fields():
+    """``MS_TRADE_CONFIRM_TR``, Table 60 -- 192 bytes.
+
+    ``GoodTillDate`` and ``OpOrderNumber``/``OpBrokerId``, which the plain
+    ``MS_TRADE_CONFIRM`` carries, do not reappear here -- the running total
+    of every other field is what proves it, since the fields below reach
+    exactly 192 with nothing left over and nothing missing.
+    """
+    return (
+        L.Field(D.RESPONSE_ORDER_NUMBER, "ResponseOrderNumber", T.DOUBLE, 26),
+        L.Field(D.TIMESTAMP2, "TimeStamp2", T.CHAR, 34),
+        L.Field(D.BROKER_ID, "BrokerId", T.Char(5), 35),
+        L.Field(D.TRADER_NUM, "TraderNum", T.LONG, 40),
+        L.Field(D.BUY_SELL, "BuySell", T.SHORT, 44),
+        L.Field(D.ACCOUNT_NUMBER, "AccountNum", T.Char(10), 46),
+        L.Field(D.ORIGINAL_VOL, "OriginalVol", T.LONG, 56),
+        L.Field(D.DISCLOSED_VOL, "DisclosedVol", T.LONG, 60),
+        L.Field(D.REMAINING_VOL, "RemainingVol", T.LONG, 64),
+        L.Field(D.DISCLOSED_VOL_REMAINING, "DisclosedVolRemaining",
+                T.LONG, 68),
+        L.Field(D.PRICE, "Price", T.LONG, 72, L.PAISE),
+        _order_flags(76),
+        L.Field(D.FILL_NUMBER, "FillNumber", T.LONG, 78),
+        L.Field(D.FILL_QTY, "FillQty", T.LONG, 82),
+        L.Field(D.FILL_PRICE, "FillPrice", T.LONG, 86, L.PAISE),
+        L.Field(D.VOLUME_FILLED_TODAY, "VolFilledToday", T.LONG, 90),
+        L.Field(D.ACTIVITY_TYPE, "ActivityType", T.Char(2), 94),
+        L.Field(D.ACTIVITY_TIME, "ActivityTime", T.LONG, 96),
+    ) + _sec_info(100) + (
+        L.Field(D.BOOK_TYPE, "BookType", T.SHORT, 112),
+        L.Field(D.PRO_CLIENT, "ProClient", T.SHORT, 114),
+        L.Field(D.PAN, "PAN", T.Char(10), 116),
+        L.Field(D.ALGO_ID, "AlgoID", T.LONG, 126),
+        L.Reserved(130, 2, "ReservedFiller"),
+        L.Field(D.LAST_ACTIVITY_REFERENCE, "LastActivityReference",
+                T.LONG_LONG, 132),
+        L.Reserved(140, 52),
+    )
+
+
+#: MS_TRADE_CONFIRM_TR's own twenty-six byte prefix, up to and including
+#: TimeStamp1 -- ResponseOrderNumber follows immediately, so TimeStamp2
+#: (offset 34) is a body field here rather than a header one, unlike every
+#: other structure in this file.
+HEADER_TRADE_TR = L.HeaderLayout(26, (
+    L.Field(L.TRANSACTION_CODE, "TransactionCode", T.SHORT, 0),
+    L.Field(D.LOG_TIME, "LogTime", T.LONG, 2),
+    L.Field(D.USER_ID, "UserId", T.LONG, 6),
+    L.Field(D.TIMESTAMP, "Timestamp", T.LONG_LONG, 10),
+    L.Field(D.TIMESTAMP1, "TimeStamp1", T.LONG_LONG, 18),
+))
+
+
+def _define_trimmed(layouts):
+    """Register the trimmed order flow and trade confirmation."""
+    layouts.define(X.BOARD_LOT_IN_TR, "ORDER_ENTRY_REQUEST_TR", 136,
+                   _oe_request_tr_fields(), header=HEADER_OE_TR)
+    for code in (X.ORDER_MOD_IN_TR, X.ORDER_CANCEL_IN_TR):
+        layouts.define(code, "ORDER_OM_REQUEST_TR", 180,
+                       _om_body_fields(response=False), header=HEADER_OM_TR)
+    for code in (X.ORDER_CONFIRMATION_TR, X.ORDER_MOD_CONFIRMATION_TR,
+                 X.ORDER_CXL_CONFIRMATION_TR, X.ORDER_ERROR_TR,
+                 X.ORDER_MOD_REJECT_TR, X.ORDER_CANCEL_REJECT_TR,
+                 X.PRICE_CONFIRMATION_TR):
+        layouts.define(code, "ORDER_OM_RESPONSE_TR", 216,
+                       _om_body_fields(response=True), header=HEADER_OM_TR)
+    layouts.define(X.TRADE_CONFIRMATION_TR, "MS_TRADE_CONFIRM_TR", 192,
+                   _trade_confirm_tr_fields(), header=HEADER_TRADE_TR)
+
+
 def build_cm():
     """Every Capital Market structure, by transaction code."""
     layouts = L.NnfDictionary(HEADER)
@@ -338,5 +524,8 @@ def build_cm():
     layouts.define(X.HEADER_RECORD, "MESSAGE_HEADER", 40, ())
     layouts.define(X.TRAILER_RECORD, "MESSAGE_HEADER", 40, ())
     layouts.define_record(X.MESSAGE_RECORD, "MESSAGE_RECORD", D.DOWNLOAD_DATA)
+
+    # -- the trimmed order flow, Chapter 10 appendix ----------------------
+    _define_trimmed(layouts)
 
     return layouts

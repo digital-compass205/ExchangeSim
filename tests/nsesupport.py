@@ -177,6 +177,57 @@ class BoxClient(object):
             fields[D.PRICE] = price
         return self.send(X.ORDER_MOD_IN, fields, user_id=user_id)
 
+    # -- the trimmed order flow ---------------------------------------------
+
+    def trimmed_order(self, user_id, side=D.BuySell.BUY, quantity=100,
+                      price="1543.25", symbol=SYMBOL, series=SERIES,
+                      extra=None):
+        """The same order over ``ORDER_ENTRY_REQUEST_TR``.
+
+        Deliberately built from the same fields as :meth:`new_order`: the two
+        encodings carry the same values under the same tags, and everything
+        that differs -- the header, the offsets, the widths -- belongs to the
+        layout. A helper that spelled them differently would hide exactly the
+        bug this exists to catch.
+        """
+        fields = {
+            D.SYMBOL: symbol,
+            D.SERIES: series,
+            D.BOOK_TYPE: D.BookType.REGULAR_LOT,
+            D.BUY_SELL: side,
+            D.VOLUME: quantity,
+            D.PRO_CLIENT: D.ProClient.CLIENT,
+            D.ACCOUNT_NUMBER: "CLIENT%d" % user_id,
+            D.BROKER_ID: self.broker_id,
+            D.FLAG_DAY: "Y",
+        }
+        if price is not None:
+            fields[D.PRICE] = price
+        fields.update(extra or {})
+        return self.send(X.BOARD_LOT_IN_TR, fields, user_id=user_id)
+
+    def trimmed_cancel(self, user_id, order_number, symbol=SYMBOL,
+                       series=SERIES):
+        return self.send(X.ORDER_CANCEL_IN_TR, {
+            D.ORDER_NUMBER: order_number,
+            D.SYMBOL: symbol, D.SERIES: series,
+            D.BOOK_TYPE: D.BookType.REGULAR_LOT,
+        }, user_id=user_id)
+
+    def trimmed_modify(self, user_id, order_number, quantity=None,
+                       price=None, symbol=SYMBOL, series=SERIES):
+        fields = {
+            D.ORDER_NUMBER: order_number,
+            D.SYMBOL: symbol, D.SERIES: series,
+            D.BOOK_TYPE: D.BookType.REGULAR_LOT,
+            D.FLAG_DAY: "Y",
+        }
+        if quantity is not None:
+            fields[D.VOLUME] = quantity
+        if price is not None:
+            fields[D.PRICE] = price
+        return self.send(X.ORDER_MOD_IN_TR, fields, user_id=user_id)
+
 
 class VenueHarness(object):
     """A started NSE venue, its control registry, and clients for its boxes."""

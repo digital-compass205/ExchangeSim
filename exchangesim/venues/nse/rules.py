@@ -159,6 +159,73 @@ def error_for(reason, table, default=INVALID_ORDER_PARAM):
     return table.get(reason, default)
 
 
+# -- the trimmed order flow --------------------------------------------------
+
+#: A trimmed request against its plain twin. Both encodings are served, and a
+#: client is answered in the one it asked in -- so this is read in both
+#: directions rather than being a rewrite on the way in.
+TRIMMED_REQUESTS = {
+    X.BOARD_LOT_IN_TR: X.BOARD_LOT_IN,
+    X.ORDER_MOD_IN_TR: X.ORDER_MOD_IN,
+    X.ORDER_CANCEL_IN_TR: X.ORDER_CANCEL_IN,
+}
+
+#: What each plain response becomes for an order entered over the trimmed
+#: structures. Unlike Futures & Options, this venue's own appendix publishes
+#: a trimmed twin of every plain code, ORDER_ERROR and the two rejects
+#: included, so the mapping is one code to one code and needs no ErrorCode
+#: branching -- see F&O's rules.py for the venue where it does.
+TRIMMED_RESPONSES = {
+    X.ORDER_CONFIRMATION: X.ORDER_CONFIRMATION_TR,
+    X.ORDER_MOD_CONFIRMATION: X.ORDER_MOD_CONFIRMATION_TR,
+    X.ORDER_CANCEL_CONFIRMATION: X.ORDER_CXL_CONFIRMATION_TR,
+    X.ORDER_ERROR: X.ORDER_ERROR_TR,
+    X.ORDER_MOD_REJECT: X.ORDER_MOD_REJECT_TR,
+    X.ORDER_CANCEL_REJECT: X.ORDER_CANCEL_REJECT_TR,
+    X.PRICE_CONFIRMATION: X.PRICE_CONFIRMATION_TR,
+    X.TRADE_CONFIRMATION: X.TRADE_CONFIRMATION_TR,
+}
+
+#: The reverse, for the message download: "a downloaded message is always a
+#: non-trimmed message" -- a trimmed structure has no forty-byte header, so
+#: it could not be wrapped in a MESSAGE_RECORD even in principle.
+UNTRIMMED_RESPONSES = dict((tr, plain)
+                           for plain, tr in TRIMMED_RESPONSES.items())
+
+
+def plain_code(msg_type):
+    """The plain transaction code a trimmed request carries, or None."""
+    try:
+        return TRIMMED_REQUESTS.get(int(msg_type))
+    except (TypeError, ValueError):
+        return None
+
+
+def trimmed_code(code, trimmed):
+    """Which of a response's two codes to answer with."""
+    return TRIMMED_RESPONSES.get(code, code) if trimmed else code
+
+
+def untrimmed(message):
+    """The form of a message a message download replays.
+
+    A trimmed response becomes its plain twin, by a direct lookup -- unlike
+    F&O, this venue's trimmed responses need no ErrorCode branching, since a
+    trimmed refusal already carries its own code. Anything else is already
+    the right shape and is returned untouched -- and *not* copied, because
+    the store keeps what it is given and nothing mutates a sent message.
+    """
+    try:
+        plain = UNTRIMMED_RESPONSES.get(int(message.msg_type))
+    except (TypeError, ValueError):
+        return message
+    if plain is None:
+        return message
+    recovered = message.copy()
+    recovered.set(D.TRANSACTION_CODE, str(plain))
+    return recovered
+
+
 # -- order attributes from the flag bits -------------------------------------
 
 def time_in_force(message):
@@ -308,6 +375,16 @@ def is_recoverable(msg_type):
 
 
 ASSUMPTIONS = [
+    "The trimmed (_TR) order flow is served alongside the plain 290-byte "
+    "structures, and a client is answered in the encoding it asked in -- "
+    "read off the *order* rather than off the request, so that a trade "
+    "confirmation and a cancel on disconnect, which answer no request, "
+    "still go back in the right one. Unlike Futures & Options, this venue's "
+    "own appendix (Tables 57-60) publishes a trimmed ORDER_ERROR (20231), "
+    "ORDER_MOD_REJECT (20042) and ORDER_CANCEL_REJECT (20072), so a refused "
+    "trimmed order is answered with its own trimmed refusal code rather "
+    "than a confirmation carrying a non-zero ErrorCode.",
+
     "The message download replays every message this venue sent a user, "
     "bounded by 'nnf.recovery_capacity' (500) rather than by the trading "
     "day, and keyed on the header's TimeStamp1 in jiffies from 1980 -- the "
@@ -400,6 +477,12 @@ NOT_IMPLEMENTED = [
     "written under this project's standard-library-only constraint. Market "
     "data is on the control plane, the CLI and the board instead.",
     "Market-wide index circuit breakers.",
+    "The immediate-acknowledgement alternates the trimmed tables list beside "
+    "the ordinary codes (TRIMMED_BOARD_LOT_ACK_IN 20400, "
+    "TRIMMED_ORDER_MOD_ACK_IN 20402, TRIMMED_ORDER_CANCEL_ACK_IN 20404). "
+    "This document gives them nothing beyond the number -- no response "
+    "structure, no chapter -- so they are refused as unrecognised codes "
+    "rather than answered in a guessed shape.",
 ]
 
 

@@ -161,6 +161,12 @@ STATIC_IV = 9175
 DYNAMIC_IV = 9176
 ADDITIONAL_KEY = 9177
 
+# The trimmed order flow (Chapter 10 Tables 57-60). Everything else it needs
+# is already a tag above -- a trimmed structure carries a subset of the same
+# fields -- except this one, which the plain 290-byte structure does not
+# carry at all and which the document's own field tables never gloss.
+TRANSACTION_ID = 9178
+
 # ERROR_RESPONSE.
 ERROR_MESSAGE = 58              # Text
 
@@ -379,6 +385,8 @@ def application_fields():
         _text(PAN, "PAN", 10),
         _number(ALGO_ID, "AlgoID"),
         _number(LAST_ACTIVITY_REFERENCE, "LastActivityReference"),
+        # The trimmed order flow (Chapter 10 Tables 57-60) only.
+        _number(TRANSACTION_ID, "TransactionId"),
 
         # -- the trade ------------------------------------------------------
         _text(RESPONSE_ORDER_NUMBER, "ResponseOrderNumber", 20),
@@ -505,6 +513,10 @@ _ORDER_TAGS = (
     FLAG_FROZEN, FLAG_PREOPEN, FLAG_STPC,
 )
 
+#: The trimmed order flow's own tag set: everything the plain structures
+#: carry, plus TransactionId, which they do not.
+_TRIMMED_ORDER_TAGS = _ORDER_TAGS + (TRANSACTION_ID,)
+
 _TRADE_TAGS = (
     SYMBOL, SERIES, RESPONSE_ORDER_NUMBER, BROKER_ID, TRADER_NUM,
     ACCOUNT_NUMBER, BUY_SELL, ORIGINAL_VOL, DISCLOSED_VOL, REMAINING_VOL,
@@ -588,8 +600,41 @@ def application_messages():
         _message(X.PRICE_CONFIRMATION, "PRICE_CONFIRMATION", _ORDER_TAGS,
                  inbound=False),
 
+        # -- the trimmed order flow ------------------------------------------
+        #
+        # The same value domains over a second, compact encoding: the tag set
+        # is the plain one plus TransactionId, because a trimmed structure
+        # carries a subset of the same fields and a dictionary here checks
+        # values rather than presence (see layouts.py). What differs is
+        # entirely below this layer -- the header, the offsets and the widths.
+        #
+        # Named by transaction, not by structure, as the plain family is: the
+        # name is what the audit, the CLI and the board label an entry with,
+        # and seven codes share ORDER_OM_RESPONSE_TR -- a confirmation and a
+        # refusal must not read the same.
+        _message(X.BOARD_LOT_IN_TR, "BOARD_LOT_IN_TR", _TRIMMED_ORDER_TAGS),
+        _message(X.ORDER_MOD_IN_TR, "ORDER_MOD_IN_TR", _TRIMMED_ORDER_TAGS),
+        _message(X.ORDER_CANCEL_IN_TR, "ORDER_CANCEL_IN_TR",
+                 _TRIMMED_ORDER_TAGS),
+        _message(X.ORDER_CONFIRMATION_TR, "ORDER_CONFIRMATION_TR",
+                 _TRIMMED_ORDER_TAGS, inbound=False),
+        _message(X.ORDER_MOD_CONFIRMATION_TR, "ORDER_MOD_CONFIRMATION_TR",
+                 _TRIMMED_ORDER_TAGS, inbound=False),
+        _message(X.ORDER_CXL_CONFIRMATION_TR, "ORDER_CXL_CONFIRMATION_TR",
+                 _TRIMMED_ORDER_TAGS, inbound=False),
+        _message(X.ORDER_ERROR_TR, "ORDER_ERROR_TR",
+                 _TRIMMED_ORDER_TAGS, inbound=False),
+        _message(X.ORDER_MOD_REJECT_TR, "ORDER_MOD_REJECT_TR",
+                 _TRIMMED_ORDER_TAGS, inbound=False),
+        _message(X.ORDER_CANCEL_REJECT_TR, "ORDER_CANCEL_REJECT_TR",
+                 _TRIMMED_ORDER_TAGS, inbound=False),
+        _message(X.PRICE_CONFIRMATION_TR, "PRICE_CONFIRMATION_TR",
+                 _TRIMMED_ORDER_TAGS, inbound=False),
+
         # -- trades ---------------------------------------------------------
         _message(X.TRADE_CONFIRMATION, "TRADE_CONFIRMATION", _TRADE_TAGS,
+                 inbound=False),
+        _message(X.TRADE_CONFIRMATION_TR, "TRADE_CONFIRMATION_TR", _TRADE_TAGS,
                  inbound=False),
 
         # -- recovery -------------------------------------------------------

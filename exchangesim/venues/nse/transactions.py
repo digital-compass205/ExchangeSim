@@ -66,6 +66,41 @@ TRADE_CANCEL_CONFIRM = 2282
 TRADE_CANCEL_REJECT = 2286
 TRADE_MODIFY_CONFIRM = 2287
 
+# -- the "trimmed" order flow -------------------------------------------------
+#
+# Chapter 10's own appendix (Tables 57-60): a second, compact encoding of order
+# entry, modification, cancellation and their answers, and of the trade
+# confirmation. None of these carry the forty-byte MESSAGE_HEADER -- each
+# opens with a prefix of its own. And this is not an optional extra: "the
+# Request messages in transaction codes [BOARD_LOT_IN, ORDER_MOD_IN,
+# ORDER_CANCEL_IN] must have BookType 1 or 11 or 12", and MS_OE_REQUEST "is
+# not allowed" with those book types at all -- Regular Lot is 1, the only book
+# this venue trades, so this is what a real Direct Interface gateway sends for
+# every order this venue accepts. The plain 290-byte structures are served
+# too, and a client is answered in whichever it asked in.
+
+BOARD_LOT_IN_TR = 20000
+ORDER_MOD_IN_TR = 20040
+ORDER_MOD_REJECT_TR = 20042
+ORDER_CANCEL_IN_TR = 20070
+ORDER_CANCEL_REJECT_TR = 20072
+ORDER_CONFIRMATION_TR = 20073
+ORDER_MOD_CONFIRMATION_TR = 20074
+ORDER_CXL_CONFIRMATION_TR = 20075
+ORDER_ERROR_TR = 20231
+PRICE_CONFIRMATION_TR = 20012
+TRADE_CONFIRMATION_TR = 20222
+
+#: The immediate-acknowledgement alternates the table headers list beside the
+#: ordinary trimmed codes (for example "BOARD_LOT_IN_TR (20000) /
+#: TRIMMED_BOARD_LOT_ACK_IN (20400)"). Unlike Futures & Options' Chapter 15,
+#: this document gives them no separate structure or chapter of their own --
+#: nothing beyond the alternate number -- so they are named here to be
+#: refused rather than guessed at. See rules.NOT_IMPLEMENTED.
+TRIMMED_BOARD_LOT_ACK_IN = 20400
+TRIMMED_ORDER_MOD_ACK_IN = 20402
+TRIMMED_ORDER_CANCEL_ACK_IN = 20404
+
 # -- order and trade download, the recovery this protocol has instead of ------
 # a resend request.
 

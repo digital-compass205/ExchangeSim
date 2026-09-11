@@ -361,33 +361,50 @@ sample code pins both the minimum and the maximum to 1.3. The generated key in
 `var/tls/` is a **simulator** key: it exists so a client can complete a
 handshake, and it should never be promoted anywhere.
 
-**Order entry has two encodings, and a real gateway uses the second.** The
-plain 316-byte `MS_OE_REQUEST` (`BOARD_LOT_IN 2000`) and the compact 158-byte
-`MS_OE_REQUEST_TR` (`BOARD_LOT_IN_TR 20000`) carry the same values under the
-same fields; what differs is that **a trimmed structure has no 40-byte
-message header** — it opens with eight bytes, and its responses
-(`ORDER_CONFIRMATION_TR 20073`, `ORDER_MOD_CONFIRMATION_TR 20074`,
-`ORDER_CXL_CONFIRMATION_TR 20075`, `TRADE_CONFIRMATION_TR 20222`) with
-twenty-two or thirty-four. Both are served, and you are answered in whichever
-you send; unsolicited reports follow the encoding the *order* was entered in.
-A refused trimmed order comes back as its confirmation code with a non-zero
-`ErrorCode`, because the appendix publishes no trimmed `ORDER_ERROR`. Spread,
-two-leg and three-leg orders are not trimmed and are not supported.
+**Order entry has two encodings at both NSE venues, and a real gateway uses
+the second.** Each publishes its own compact `_TR` structures alongside its
+plain ones — Capital Market's own Chapter 10 appendix says "the Request
+messages in transaction codes [`BOARD_LOT_IN`, `ORDER_MOD_IN`,
+`ORDER_CANCEL_IN`] must have BookType 1 or 11 or 12" and that the plain
+structure "is not allowed" with those book types at all, and Regular Lot
+(BookType 1) is the only book Capital Market trades — so this is not an
+optional extra at either venue, it is what a real Direct Interface gateway
+sends for every order it accepts. Both are served, and you are answered in
+whichever you send; unsolicited reports follow the encoding the *order* was
+entered in.
 
-**Spread orders** are their own flow: `SP_BOARD_LOT_IN (2100)` and the eight
-codes around it, all sharing one 480-byte `MS_SPD_OE_REQUEST`, and none of
-them trimmed. A spread is a calendar spread — two futures on one symbol with
-different expiries, the nearer first — quoted at `PriceDiff`, the gap between
-the legs, which may be negative. Valid pairs come from
-`venues/nsefo/reference/spreads.csv`, the Spread Combination file; a pair of
-listed futures is not automatically a spread. A match is reported as **two**
-`TRADE_CONFIRMATION`s, one per leg, since that is what you end up holding: the
-levels are the venue's to pick, the difference between them is what you
-traded. IOC, GTC/GTD, disclosed quantity and a Special Terms book are refused,
-as are two-leg and three-leg orders, which share the structure and nothing
-else.
+The two venues' trimmed families are separately transcribed and differ in
+shape. At **NSE Cash**, `BOARD_LOT_IN_TR (20000)` opens with a six-byte
+prefix and its modify/cancel pair (`ORDER_MOD_IN_TR 20040`,
+`ORDER_CANCEL_IN_TR 20070`) and their answers share one twenty-four byte
+prefix; the appendix publishes a dedicated `ORDER_ERROR_TR (20231)`,
+`ORDER_MOD_REJECT_TR (20042)` and `ORDER_CANCEL_REJECT_TR (20072)`, so a
+refusal answers in its own trimmed code rather than a confirmation carrying a
+non-zero `ErrorCode`. At **NSE F&O**, `BOARD_LOT_IN_TR (20000)` is the
+316-byte `MS_OE_REQUEST`'s 158-byte twin with an eight-byte prefix, and its
+three confirmation codes (`ORDER_CONFIRMATION_TR 20073`,
+`ORDER_MOD_CONFIRMATION_TR 20074`, `ORDER_CXL_CONFIRMATION_TR 20075`) are the
+*only* trimmed responses the appendix publishes — no trimmed `ORDER_ERROR` —
+so a refused trimmed order there comes back as its confirmation code with a
+non-zero `ErrorCode` instead. Run `exsim --port 9103 call venue.assumptions`
+(Cash) or `--port 9104` (F&O) for either venue's full list of what it
+refuses.
 
-There is no resend. A report produced while a user was signed off is dropped
+**Spread orders** are F&O's own flow, and NSE Cash does not have them:
+`SP_BOARD_LOT_IN (2100)` and the eight codes around it, all sharing one
+480-byte `MS_SPD_OE_REQUEST`, and none of them trimmed. A spread is a
+calendar spread — two futures on one symbol with different expiries, the
+nearer first — quoted at `PriceDiff`, the gap between the legs, which may be
+negative. Valid pairs come from `venues/nsefo/reference/spreads.csv`, the
+Spread Combination file; a pair of listed futures is not automatically a
+spread. A match is reported as **two** `TRADE_CONFIRMATION`s, one per leg,
+since that is what you end up holding: the levels are the venue's to pick,
+the difference between them is what you traded. IOC, GTC/GTD, disclosed
+quantity and a Special Terms book are refused, as are two-leg and three-leg
+orders, which share the structure and nothing else.
+
+Both NSE venues share the rest of this section. There is no resend: a report
+produced while a user was signed off is dropped
 rather than queued, and the client gets it back by asking: **`DOWNLOAD_REQUEST`
 (7000)** names a stream in the header's `AlphaChar` and a cursor in
 `SequenceNumber`, and the venue answers `HEADER_RECORD (7011)`, one

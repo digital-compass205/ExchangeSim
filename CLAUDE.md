@@ -117,7 +117,7 @@ Reach for any venue module as a template only after checking these, because each
 | Auctions | none — the rules say so outright | POS and CAS, uncrossed by `core/auction.py` | the pre-open, with a **four**-rule chain: no surplus-direction tie-break | none built; its pre-open and its fifth status, Postclose, are published but unimplemented |
 | Self-trade prevention | per-market mode, keyed on MPID | per-order `SelfMatchPreventionID(2362)`; the *instruction* is registered against the ID out of band, hence `venue.smp_instructions` | **none**, and a market configured with any mode is refused at start-up | none either, though an `STPC` bit exists on the wire and is refused |
 | Groups | none | `<Parties>` and `<DisclosureInstructionGrp>` on every business message | none; every field of a structure is always on the wire | the same |
-| Order-entry encoding | one | one per encoding | one | **two**: the plain 316-byte structure and the compact `_TR` one, which carries no 40-byte header at all. A real gateway sends only the second |
+| Order-entry encoding | one | one per encoding | **two**, transcribed separately from F&O's: the plain 290-byte structure and its own compact `_TR` family, which publishes a dedicated trimmed `ORDER_ERROR`/`ORDER_MOD_REJECT`/`ORDER_CANCEL_REJECT` that F&O's document does not | **two**: the plain 316-byte structure and the compact `_TR` one, which carries no 40-byte header at all. A real gateway sends only the second |
 | Acknowledgement | only for an order that rests untraded | **before** matching -- `Market(ack_on_entry=True)` | **before** matching, for the same reason and more sharply: the acknowledgement is where the client learns the order number | the same |
 | Rejection | `OrdRejReason(103)` on an Execution Report | its own reject codes | a numeric `ErrorCode` in the header of the erroring form of the same transaction | the same, from its **own** table -- 16521 means different things at the two venues |
 | Encryption | none | none (the credential is opaque) | **AES-256-GCM on every message**, under a key collected from a separate Gateway Router port | the same, over its own router on its own port |
@@ -316,6 +316,20 @@ Three consequences:
 Chapter 15's immediate-acknowledgement codes (`TRIMMED_*_ACK_IN`) share these
 structures but are a *separate listener* on a separate Gateway Router port,
 and are unbuilt.
+
+**Capital Market turned out to need the identical mechanism, transcribed
+from a different table.** Its own Chapter 10 appendix requires a `_TR` family
+too -- "the Request messages ... must have BookType 1 or 11 or 12", and
+Regular Lot is BookType 1, the only book Capital Market trades -- so
+`NnfDictionary.define(..., header=...)` was not an F&O special case, it was
+a capability the format needed twice. What is *not* shared is a byte of
+either family's layout: Capital Market's headers are six and twenty-four
+bytes against F&O's eight, twenty-two and thirty-four, and its appendix
+publishes a trimmed `ORDER_ERROR`/`ORDER_MOD_REJECT`/`ORDER_CANCEL_REJECT`
+that F&O's does not -- so `nse/rules.py:TRIMMED_RESPONSES` needs no
+ErrorCode branching where `nsefo/rules.py`'s does. Three
+`TRIMMED_*_ACK_IN` alternates sit in Capital Market's own tables too, with
+nothing published beyond the number, and are refused the same way.
 
 **A spread combination is an instrument, which is what makes it matchable.**
 F&O's spread order is "a combination of two normal orders on two contracts

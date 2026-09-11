@@ -751,3 +751,173 @@ class MessageDownloadTest(unittest.TestCase):
         since = self.cursor()
         self.client.clear()
         self.assertEqual([], self.recovered(since=since))
+
+
+class TrimmedOrderFlowTest(unittest.TestCase):
+    """The compact encoding of order entry -- what a real gateway sends.
+
+    Chapter 10's own appendix (Tables 57-60): "the Request messages in
+    transaction codes [BOARD_LOT_IN, ORDER_MOD_IN, ORDER_CANCEL_IN] must have
+    BookType 1 or 11 or 12", and MS_OE_REQUEST "is not allowed" with those
+    book types at all. Regular Lot is BookType 1, the only book this venue
+    trades, so this is not an optional extra -- it is what a real Direct
+    Interface gateway sends for every order this venue accepts.
+
+    Both encodings are served and a client is answered in the one it asked
+    in, which is why almost every test here is a pair.
+    """
+
+    def setUp(self):
+        self.harness = VenueHarness()
+        self.addCleanup(self.harness.close)
+        self.client = self.harness.client()
+
+    def test_a_trimmed_order_is_confirmed_in_the_trimmed_structure(self):
+        self.client.trimmed_order(USER_ONE, quantity=100, price="1543.25")
+        confirmation = self.client.last()
+        self.assertEqual(X.ORDER_CONFIRMATION_TR, int(confirmation.msg_type))
+        self.assertEqual("0", confirmation.get(D.ERROR_CODE))
+        self.assertEqual("1", confirmation.get(D.ORDER_NUMBER))
+        self.assertEqual("100", confirmation.get(D.VOLUME))
+        self.assertEqual(INSTRUMENT.split("-")[0], confirmation.get(D.SYMBOL))
+        self.assertEqual(str(USER_ONE), confirmation.get(D.USER_ID))
+
+    def test_a_plain_order_is_still_confirmed_in_the_plain_structure(self):
+        # The two encodings coexist; serving one must not have moved the other.
+        self.client.new_order(USER_ONE, quantity=100, price="1543.25")
+        self.assertEqual(X.ORDER_CONFIRMATION,
+                         int(self.client.last().msg_type))
+
+    def test_the_two_encodings_carry_the_same_order(self):
+        # The strongest statement this file can make: same fields in, same
+        # fields out, different bytes on the wire.
+        self.client.trimmed_order(USER_ONE, quantity=200, price="1550.00")
+        trimmed = self.client.last()
+        self.client.new_order(USER_ONE, quantity=200, price="1550.00")
+        plain = self.client.last()
+
+        for tag in (D.SYMBOL, D.SERIES, D.VOLUME, D.PRICE, D.BOOK_TYPE,
+                    D.BUY_SELL, D.TOTAL_VOL_REMAINING, D.ACCOUNT_NUMBER,
+                    D.USER_ID, D.BROKER_ID):
+            self.assertEqual(plain.get(tag), trimmed.get(tag),
+                             "tag %d differs between the encodings" % tag)
+
+    def test_a_trimmed_order_wire_frame_is_the_published_size(self):
+        # 136 bytes of structure, and no forty-byte header anywhere in it.
+        message = self.client.trimmed_order(USER_ONE, price="1543.25")
+        raw = self.harness.venue.layouts.layout(X.BOARD_LOT_IN_TR).encode(
+            message)
+        self.assertEqual(136, len(raw))
+        self.assertEqual(X.BOARD_LOT_IN_TR,
+                         self.harness.venue.layouts.transaction_code(raw))
+
+    def test_modify_and_cancel_answer_in_the_trimmed_structure(self):
+        self.client.trimmed_order(USER_ONE, quantity=100, price="1543.25")
+        self.client.clear()
+
+        self.client.trimmed_modify(USER_ONE, "1", quantity=200)
+        self.assertEqual(X.ORDER_MOD_CONFIRMATION_TR,
+                         int(self.client.last().msg_type))
+
+        self.client.trimmed_cancel(USER_ONE, "1")
+        self.assertEqual(X.ORDER_CXL_CONFIRMATION_TR,
+                         int(self.client.last().msg_type))
+
+    def test_a_refused_trimmed_order_is_the_dedicated_error_structure(self):
+        # Unlike Futures & Options, this venue's own appendix publishes a
+        # trimmed ORDER_ERROR (20231), so a refusal answers in that code
+        # rather than a confirmation carrying a non-zero ErrorCode.
+        self.client.trimmed_order(
+            USER_ONE, price="1543.25",
+            extra={D.BOOK_TYPE: D.BookType.SPECIAL_TERMS})
+        refusal = self.client.last()
+        self.assertEqual(X.ORDER_ERROR_TR, int(refusal.msg_type))
+        self.assertEqual("16422", refusal.get(D.ERROR_CODE))
+        self.assertEqual("16422", refusal.get(D.REASON_CODE))
+
+    def test_a_refused_modify_is_the_dedicated_reject_structure(self):
+        self.client.trimmed_order(USER_ONE, quantity=100, price="1543.25")
+        self.client.clear()
+        # Good Till Cancelled is refused outright, and this is a
+        # validation-time refusal -- unlike an unknown order number, it is
+        # answered off the request rather than off an order, so it is the
+        # case this venue can actually answer in the trimmed encoding.
+        self.client.send(X.ORDER_MOD_IN_TR, {
+            D.ORDER_NUMBER: "1", D.BOOK_TYPE: D.BookType.REGULAR_LOT,
+            D.FLAG_GTC: "Y",
+        }, user_id=USER_ONE)
+        refusal = self.client.last()
+        self.assertEqual(X.ORDER_MOD_REJECT_TR, int(refusal.msg_type))
+        self.assertEqual("16326", refusal.get(D.ERROR_CODE))
+
+    def test_a_trade_answers_each_side_in_its_own_encoding(self):
+        # Nothing answers a trade confirmation, so the encoding is read off
+        # the order rather than off a request -- and two members on opposite
+        # sides of one trade can be using different ones.
+        resting = self.harness.client(box_id=BOX_ONE, users=(USER_ONE,))
+        aggressor = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+        resting.trimmed_order(USER_ONE, side=D.BuySell.SELL, quantity=100,
+                              price="1543.25")
+        resting.clear()
+
+        aggressor.new_order(USER_THREE, side=D.BuySell.BUY, quantity=100,
+                            price="1543.25")
+
+        self.assertEqual([X.TRADE_CONFIRMATION_TR],
+                         [int(m.msg_type) for m in resting.received()])
+        self.assertEqual([X.ORDER_CONFIRMATION, X.TRADE_CONFIRMATION],
+                         [int(m.msg_type) for m in aggressor.received()])
+
+    def test_a_cancel_on_disconnect_keeps_the_orders_own_encoding(self):
+        self.client.trimmed_order(USER_ONE, quantity=100, price="1543.25")
+        self.client.clear()
+        self.harness.command("orders.cancel_all", market="NORMAL")
+        self.assertEqual([X.ORDER_CXL_CONFIRMATION_TR],
+                         [int(m.msg_type) for m in self.client.received()])
+
+    def test_a_download_replays_the_non_trimmed_form(self):
+        # "A downloaded message is always a non-trimmed message" -- and it
+        # must be, because a trimmed structure has no forty-byte header to
+        # wrap in a MESSAGE_RECORD.
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        since = int(self.client.last().get(D.TIMESTAMP1))
+        self.client.clear()
+        self.client.trimmed_order(USER_ONE, quantity=100, price="1543.25")
+        self.assertEqual(X.ORDER_CONFIRMATION_TR,
+                         int(self.client.last().msg_type))
+        self.client.clear()
+
+        self.client.send(X.DOWNLOAD_REQUEST,
+                         {D.DOWNLOAD_SEQUENCE: since}, user_id=USER_ONE)
+        layouts = self.harness.venue.layouts
+        recovered = []
+        for message in self.client.received():
+            if int(message.msg_type) != X.MESSAGE_RECORD:
+                continue
+            payload = message.get(D.DOWNLOAD_DATA).encode("latin-1")
+            code = layouts.transaction_code(payload)
+            recovered.append(layouts.layout(code).decode(payload))
+
+        self.assertEqual([X.ORDER_CONFIRMATION],
+                         [int(m.msg_type) for m in recovered])
+        self.assertEqual("1", recovered[0].get(D.ORDER_NUMBER))
+
+    def test_a_refused_trimmed_order_recovers_as_the_plain_order_error(self):
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        since = int(self.client.last().get(D.TIMESTAMP1))
+        self.client.clear()
+        self.client.trimmed_order(
+            USER_ONE, price="1543.25",
+            extra={D.BOOK_TYPE: D.BookType.SPECIAL_TERMS})
+        self.client.clear()
+
+        self.client.send(X.DOWNLOAD_REQUEST,
+                         {D.DOWNLOAD_SEQUENCE: since}, user_id=USER_ONE)
+        layouts = self.harness.venue.layouts
+        recovered_codes = []
+        for message in self.client.received():
+            if int(message.msg_type) != X.MESSAGE_RECORD:
+                continue
+            payload = message.get(D.DOWNLOAD_DATA).encode("latin-1")
+            recovered_codes.append(layouts.transaction_code(payload))
+        self.assertEqual([X.ORDER_ERROR], recovered_codes)

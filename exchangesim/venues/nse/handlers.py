@@ -15,10 +15,15 @@ for a cancellation -- carrying a numeric ``ErrorCode`` in the message header.
 That is why the session layer hands a dialect failure back here through
 ``on_invalid`` instead of answering it itself.
 
-**One structure serves the whole order flow.** ``ORDER_ENTRY_REQUEST`` is 290
-bytes whether it is an entry, a confirmation, a modification or a refusal, so
-:meth:`NseApplication._base_report` fills it once and each renderer changes the
-transaction code and whichever running totals differ.
+**One structure serves the whole order flow -- in two encodings.**
+``ORDER_ENTRY_REQUEST`` is 290 bytes whether it is an entry, a confirmation, a
+modification or a refusal, so :meth:`NseApplication._base_report` fills it
+once and each renderer changes the transaction code and whichever running
+totals differ. The compact ``_TR`` structures carry the same fields under the
+same tags -- what a real Direct Interface gateway actually sends for the
+Regular Lot book this venue trades -- so ``_code_for`` picks whichever
+encoding the order arrived in, and a report otherwise renders exactly the
+same way.
 """
 
 import logging
@@ -50,6 +55,11 @@ class NseApplication(Application):
         self._sessions = {}
         #: order id -> the member's own NNFField reference, echoed on reports.
         self._references = {}
+        #: Order numbers entered over the trimmed structures. A report about
+        #: an order goes back in the encoding that order arrived in,
+        #: including the unsolicited ones -- a trade confirmation, a cancel
+        #: on disconnect -- which no request is there to answer.
+        self._trimmed = set()
 
     # -- the box sequence --------------------------------------------------
 
@@ -339,11 +349,12 @@ class NseApplication(Application):
         * **The inner header is the ordinary MESSAGE_HEADER**, the
           direct-connection one, not the ``INNER_MESSAGE_HEADER`` Chapter 2
           prescribes for download data. See ``nnf/layout.py:RecordLayout``.
-        * **A recovered message is always the non-trimmed form.** Nothing to do
-          here today, because this venue answers in the full structures
-          already, but it is why the store keeps the message rather than the
-          bytes that went out: a ``_TR`` structure has no forty-byte header at
-          all and so could never be wrapped.
+        * **A recovered message is always the non-trimmed form.** A ``_TR``
+          structure has no forty-byte header at all and so could never be
+          wrapped in a record -- which is why the store keeps the
+          ``Message`` rather than the bytes that went out, and takes
+          ``rules.untrimmed`` as its normalise hook to rewrite a trimmed
+          response's transaction code to its plain twin on the way in.
 
         The outer record repeats the recovered message's own ``TimeStamp1``
         rather than taking a fresh one, so that a client tracking its cursor
@@ -424,6 +435,16 @@ class NseApplication(Application):
         return self._reject_change(session, message, X.ORDER_ERROR, error_code)
 
     def _reject_change(self, session, message, code, error_code):
+        """Refuse a request by echoing it back with an error.
+
+        The encoding comes from the request rather than from an order, since
+        a refused order entry has no order -- and this venue's own trimmed
+        refusal codes (ORDER_ERROR_TR, ORDER_MOD_REJECT_TR,
+        ORDER_CANCEL_REJECT_TR) mean the answer needs no ErrorCode
+        branching. See rules.TRIMMED_RESPONSES.
+        """
+        trimmed = rules.plain_code(message.msg_type) is not None
+        code = rules.trimmed_code(code, trimmed)
         reply = Message.create(str(code))
         for tag, value in message.fields:
             if tag not in (D.MESSAGE_LENGTH,):
@@ -487,15 +508,43 @@ class NseApplication(Application):
         because several are in flight at once.
         """
         reference = message.get(D.NNF_FIELD)
+        trimmed = rules.plain_code(message.msg_type) is not None
         for event in events:
             order = getattr(event, "order", None)
             if order is None:
                 continue
             if reference is not None:
                 self._references.setdefault(order.order_id, reference)
-            if order.status in rules.TERMINAL_STATUSES:
-                self._references.pop(order.order_id, None)
+            if trimmed:
+                self._trimmed.add(order.order_id)
             break
+
+    def _forget(self, events):
+        """Drop what an order needed, once its last report has been rendered.
+
+        After ``_emit`` and never before. A cancellation confirmation is
+        built from an order that is *already* terminal, so forgetting on the
+        way in cost that report both the member's own NNFField reference and
+        the encoding the order was entered in -- it went back plain to a
+        client that had only ever spoken trimmed.
+        """
+        for event in events:
+            order = getattr(event, "order", None)
+            if order is None or order.status not in rules.TERMINAL_STATUSES:
+                continue
+            self._references.pop(order.order_id, None)
+            self._trimmed.discard(order.order_id)
+
+    def _code_for(self, order, code):
+        """The transaction code a report about ``order`` goes out under.
+
+        The trimmed encoding if that is how the order arrived, and the plain
+        one otherwise. Read off the *order* rather than off the request
+        being answered, because a trade confirmation and a cancel on
+        disconnect answer no request at all.
+        """
+        order_id = getattr(order, "order_id", None)
+        return rules.trimmed_code(code, order_id in self._trimmed)
 
     # -- outbound ----------------------------------------------------------
 
@@ -510,6 +559,7 @@ class NseApplication(Application):
                 self._retain(order, message)
                 continue
             self._deliver(target, message, order)
+        self._forget(events)
 
     def _session_for(self, event, fallback):
         """The session an event's report belongs to, or None for a user of
@@ -569,12 +619,14 @@ class NseApplication(Application):
     # -- reports -----------------------------------------------------------
 
     def _base_report(self, order, code):
-        """The 290-byte order structure, filled from the order.
+        """The 290-byte order structure, or its trimmed twin.
 
-        Every report about an order is this structure; only the transaction
-        code and a few running totals differ between them.
+        The same fields either way. A trimmed structure carries a subset of
+        them, and a layout only writes the fields it declares, so filling
+        the superset and letting the layout choose is not laziness -- it is
+        what keeps one renderer honest about two encodings.
         """
-        message = Message.create(str(code))
+        message = Message.create(str(self._code_for(order, code)))
         message.set(D.ERROR_CODE, str(X.NO_ERROR))
         message.set(D.LOG_TIME, str(self._nse_seconds()))
         message.set(D.TIMESTAMP, str(self._nse_nanoseconds()))
@@ -646,7 +698,8 @@ class NseApplication(Application):
         on and the order would report the final state on every fill.
         """
         order = event.order
-        message = Message.create(str(X.TRADE_CONFIRMATION))
+        message = Message.create(
+            str(self._code_for(order, X.TRADE_CONFIRMATION)))
         message.set(D.ERROR_CODE, str(X.NO_ERROR))
         message.set(D.LOG_TIME, str(self._nse_seconds()))
         message.set(D.TIMESTAMP, str(self._nse_nanoseconds()))
@@ -865,6 +918,12 @@ _HANDLERS = {
     X.SIGN_OFF_REQUEST_IN: NseApplication._on_sign_off,
     X.SYSTEM_INFORMATION_IN: NseApplication._on_system_information,
     X.DOWNLOAD_REQUEST: NseApplication._on_download_request,
+    # The trimmed forms reach the same three handlers: they carry the same
+    # fields under the same tags, and only the answer's encoding differs --
+    # that is `_trimmed` above, set from `rules.plain_code`.
+    X.BOARD_LOT_IN_TR: NseApplication._on_new_order,
+    X.ORDER_MOD_IN_TR: NseApplication._on_modify,
+    X.ORDER_CANCEL_IN_TR: NseApplication._on_cancel,
 }
 
 _RENDERERS = {

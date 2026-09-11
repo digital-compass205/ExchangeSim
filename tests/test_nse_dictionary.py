@@ -65,6 +65,19 @@ PUBLISHED_SIZES = {
     X.BOX_SIGN_ON_REQUEST_IN: 60,
     X.BOX_SIGN_ON_REQUEST_OUT: 52,
     X.DOWNLOAD_REQUEST: 48,
+
+    # The trimmed order flow, Chapter 10 appendix Tables 57-60.
+    X.BOARD_LOT_IN_TR: 136,
+    X.ORDER_MOD_IN_TR: 180,
+    X.ORDER_CANCEL_IN_TR: 180,
+    X.ORDER_CONFIRMATION_TR: 216,
+    X.ORDER_MOD_CONFIRMATION_TR: 216,
+    X.ORDER_CXL_CONFIRMATION_TR: 216,
+    X.ORDER_ERROR_TR: 216,
+    X.ORDER_MOD_REJECT_TR: 216,
+    X.ORDER_CANCEL_REJECT_TR: 216,
+    X.PRICE_CONFIRMATION_TR: 216,
+    X.TRADE_CONFIRMATION_TR: 192,
 }
 
 #: Defined in transactions.py so a log line can name them, but produced by
