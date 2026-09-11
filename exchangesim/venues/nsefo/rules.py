@@ -219,25 +219,28 @@ TERMINAL_STATUSES = frozenset((OrderStatus.FILLED, OrderStatus.CANCELLED,
 #: moves on to the next, which is what its loop is for.
 DOWNLOAD_UNKNOWN_STREAM = 0
 
-#: The download's own three answers, which are the one thing a download must
-#: not replay. Storing them would make a second download return the first one
-#: wrapped in a third, and a third return that -- growing without bound and
-#: telling the client nothing.
+#: What a download must not replay. The download's own three answers, because
+#: storing them would make a second download return the first one wrapped in a
+#: third, and a third return that -- growing without bound and telling the
+#: client nothing. And SYSTEM_INFORMATION_OUT, because it is the answer to a
+#: system information *request* that a client makes once, at logon, and sets
+#: up its streams from: it is not in Chapter 5's list, and a real client
+#: replayed a second one out of the download asserted and crashed.
 NOT_RECOVERABLE = frozenset(str(code) for code in
                             (X.HEADER_RECORD, X.MESSAGE_RECORD,
-                             X.TRAILER_RECORD))
+                             X.TRAILER_RECORD, X.SYSTEM_INFORMATION_OUT))
 
 
 def is_recoverable(msg_type):
     """Whether a message sent to a user can come back in a download.
 
-    ASSUMPTION: everything else can. Chapter 5 lists what a download returns --
-    logon and logoff responses, interactive messages from NSE-Control, order
-    and trade responses, trade confirmations, and a set of broadcasts -- but it
-    reads as illustrative rather than closed, and every message this venue
-    sends a user falls inside it. Excluding by that list instead would mean a
-    message type added later is silently unrecoverable; excluding only the
-    download's own codes means the reverse, which is visible.
+    ASSUMPTION: everything but ``NOT_RECOVERABLE`` can. Chapter 5 lists what a
+    download returns -- logon and logoff responses, interactive messages from
+    NSE-Control, order and trade responses, trade confirmations, and a set of
+    broadcasts -- but it reads as illustrative rather than closed. Excluding
+    by that list instead would mean a message type added later is silently
+    unrecoverable; excluding by name means the reverse, which is visible --
+    and it was, for system information, which is how it came to be named.
     """
     return str(msg_type) not in NOT_RECOVERABLE
 
@@ -565,8 +568,9 @@ ASSUMPTIONS = [
     "ErrorCode and a ReasonCode, and there is no other code to refuse with. "
     "See rules.TRIMMED_RESPONSES.",
 
-    "The message download replays every message this venue sent a user, "
-    "bounded by 'nnf.recovery_capacity' (500) rather than by the trading "
+    "The message download replays every message this venue sent a user "
+    "except SYSTEM_INFORMATION_OUT, which a client sets its streams up from "
+    "once at logon and asserts on a second time; bounded by 'nnf.recovery_capacity' (500) rather than by the trading "
     "day, and keyed on the header's TimeStamp1 in jiffies from 1980 -- the "
     "document gives that field's unit and never its origin. A client echoes "
     "the value back rather than reading it, so the choice is invisible to "

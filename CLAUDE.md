@@ -227,7 +227,11 @@ Six things here are load-bearing.
   the two differ only in their first twelve bytes, so the wrong one parses
   half a user id as a transaction code. A recovered message is always the
   non-trimmed form, which is why the store keeps the `Message` rather than
-  the bytes that went out.
+  the bytes that went out. And **`SYSTEM_INFORMATION_OUT` is never
+  stored**: a client sets its streams up from it once, and a second one
+  replayed by a download from zero crashed a real F&O client on an
+  assertion. `rules.NOT_RECOVERABLE` is the list; a new unsolicited
+  message type belongs on it unless Chapter 5 says a download returns it.
 - **The audit records the plaintext packet, not the ciphertext.** Under the
   existing encryption methodology the keystream runs continuously across the
   whole connection, so a packet cannot be decrypted out of order — and

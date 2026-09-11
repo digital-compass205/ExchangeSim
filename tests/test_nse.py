@@ -546,6 +546,17 @@ class HeaderUserIdTest(unittest.TestCase):
         self.assertEqual(X.SIGN_ON_REQUEST_OUT, int(refusal.msg_type))
         self.assertEqual(str(UNKNOWN_USER), refusal.get(D.USER_ID))
 
+    def test_a_market_state_broadcast_names_each_user_it_reaches(self):
+        # Sending fills the header's user id only where it is still empty, so
+        # one message shared across every session named the first user signed
+        # on to every user after it.
+        one = self.harness.client(box_id=BOX_ONE, users=(USER_ONE,))
+        other = self.harness.client(box_id=BOX_TWO, users=(USER_THREE,))
+        self.harness.set_state(TradingState.HALTED)
+        self.assertEqual({X.SYSTEM_INFORMATION_OUT}, self.names(one, USER_ONE))
+        self.assertEqual({X.SYSTEM_INFORMATION_OUT},
+                         self.names(other, USER_THREE))
+
 
 class MessageDownloadTest(unittest.TestCase):
     """DOWNLOAD_REQUEST: the only recovery this protocol has.
@@ -580,12 +591,13 @@ class MessageDownloadTest(unittest.TestCase):
         """The TimeStamp1 of the most recent message this user was sent.
 
         What a real client remembers and quotes back, and what keeps a test
-        clear of the sign-on response and system information already in the
-        store -- a download from zero replays those too, because the document
-        lists the logon response first among what recovery returns. Asking for
-        system information is how a test gets one: the harness clears the
-        transport once the opening sequence is done, and the sign-on response
-        goes with it.
+        clear of the sign-on response already in the store -- a download from
+        zero replays that too, because the document lists the logon response
+        first among what recovery returns. Asking for system information is
+        how a test gets one: the harness clears the transport once the opening
+        sequence is done, and the sign-on response goes with it. The system
+        information itself is never stored, so it moves the cursor past
+        everything before it without being replayed.
         """
         self.client.send(X.SYSTEM_INFORMATION_IN, user_id=user_id)
         stamp = int(self.client.last().get(D.TIMESTAMP1))
@@ -750,6 +762,28 @@ class MessageDownloadTest(unittest.TestCase):
         # must be told "nothing" rather than handed its whole day again.
         since = self.cursor()
         self.client.clear()
+        self.assertEqual([], self.recovered(since=since))
+
+    def test_system_information_is_never_replayed(self):
+        # A client asks for it once, at logon, and sets its streams up from
+        # it. Replayed out of a download from zero -- the first download of
+        # the day -- a second one tripped a real Futures & Options client's
+        # assertion that its streams were not yet set up, and took it down.
+        self.client.send(X.SYSTEM_INFORMATION_IN, user_id=USER_ONE)
+        self.client.new_order(USER_ONE, quantity=100, price="1500.00")
+        self.client.clear()
+
+        codes = self.codes_of(self.recovered())
+        self.assertNotIn(X.SYSTEM_INFORMATION_OUT, codes)
+        self.assertEqual([X.SIGN_ON_REQUEST_OUT, X.ORDER_CONFIRMATION], codes)
+
+    def test_a_market_state_broadcast_is_not_replayed_either(self):
+        # The same structure goes out unsolicited when the market moves, and
+        # a download after it must not hand the client a second copy.
+        since = self.cursor()
+        self.harness.set_state(TradingState.HALTED)
+        self.assertEqual(X.SYSTEM_INFORMATION_OUT,
+                         int(self.client.last().msg_type))
         self.assertEqual([], self.recovered(since=since))
 
 

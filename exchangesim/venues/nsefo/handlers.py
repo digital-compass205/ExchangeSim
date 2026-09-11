@@ -1015,9 +1015,11 @@ class NsefoApplication(Application):
         return message
 
     def broadcast_state(self, state):
-        message = self.system_information()
+        # One message per user, not one shared: sending stamps the header's
+        # user id and TimeStamp1 only where they are still empty, so a shared
+        # message would name the first user to every user after it.
         for session in list(self._sessions.values()):
-            session.send(message)
+            session.send(self.system_information())
 
     # -- time --------------------------------------------------------------
 

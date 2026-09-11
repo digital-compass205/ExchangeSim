@@ -267,6 +267,10 @@ Five things here are load-bearing.
 - **The download's own three codes are never stored.** A second download would
   otherwise return the first one wrapped in a third, without bound;
   `rules.is_recoverable` is where a venue says so.
+- **Nor is `SYSTEM_INFORMATION_OUT`.** A client asks for it once at logon and
+  sets its streams up from it, and it is not in Chapter 5's list of what a
+  download returns. Replayed by a download from zero, a second one crashed a
+  real F&O client on an assertion that its streams were not yet set up.
 
 Streams are the other half. `TimeStamp2` carries the machine number a message
 came from (its eighth byte, which is the low byte of a big-endian `LONG LONG`,

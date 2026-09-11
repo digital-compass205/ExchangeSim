@@ -810,10 +810,14 @@ class NseApplication(Application):
         self._emit(None, events)
 
     def broadcast_state(self, state):
-        """Tell every signed-on user that the market moved."""
-        message = self.system_information()
+        """Tell every signed-on user that the market moved.
+
+        One message per user, not one shared: sending stamps the header's
+        user id and TimeStamp1 only where they are still empty, so a shared
+        message would name the first user to every user after it.
+        """
         for session in list(self._sessions.values()):
-            session.send(message)
+            session.send(self.system_information())
 
     # -- time --------------------------------------------------------------
 

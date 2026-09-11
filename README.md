@@ -415,7 +415,8 @@ after; zero means the whole trading day. `TimeStamp2` carries the stream, and
 `SYSTEM_INFORMATION_OUT`'s `AlphaChar` says how many streams to loop over (one
 here, `nnf.stream`). A stream this venue does not serve answers empty rather
 than refusing, so that loop terminates. `nnf.recovery_capacity` (500) bounds
-what one user can still recover.
+what one user can still recover. `SYSTEM_INFORMATION_OUT` is never replayed:
+a client sets its streams up from it once, at logon.
 
 A record wraps the recovered message whole, its own header included, and that
 **inner header is the ordinary `MESSAGE_HEADER`** — not the
